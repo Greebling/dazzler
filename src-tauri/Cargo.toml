@@ -1,6 +1,6 @@
 [package]
 name = "deezer-client"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Unofficial desktop client for deezer.com (not affiliated with Deezer)"
 license = "AGPL-3.0-or-later"
@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-autostart = "2"
 tauri-plugin-window-state = "2"
 
 [profile.release]

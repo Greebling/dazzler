@@ -14,6 +14,10 @@ Improvements compared to the official client:
 > **Unofficial.** This project is not affiliated with, endorsed by or supported by Deezer.
 Tested on Windows - Linux and macOS builds are untested.
 
+
+## Settings
+You can find the client settings under ```Account Settings -> Client```
+
 ## Commands
 
 ```bash

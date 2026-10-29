@@ -12,6 +12,10 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 const DEEZER_URL: &str = "https://www.deezer.com/";
 const INJECT_JS: &str = include_str!("inject.js");
+const SETTINGS_JS: &str = include_str!("settings.js");
+
+// Passed by the autostart entry, so an autostarted client doesn't take the focus.
+const AUTOSTART_ARG: &str = "--autostart";
 
 // Facebook, X, Instagram and TikTok, including their CDNs and tracking endpoints.
 #[cfg(windows)]
@@ -41,8 +45,7 @@ const GZD_SCRIPTS: [&str; 4] = [
 
 // Deezer may reject WebKitGTK's own user agent as an unsupported browser.
 #[cfg(target_os = "linux")]
-const LINUX_USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+const LINUX_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 /// Forwards a media action ("playpause", "play", "pause", "nexttrack", "previoustrack") to inject.js.
 fn send_media_action(app: &AppHandle, action: &str) {
@@ -91,7 +94,9 @@ fn setup_media_controls(app: &AppHandle) {
 /// which then routes media keys and its media widgets to us.
 #[cfg(not(windows))]
 fn setup_media_controls(app: &AppHandle) {
-    use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
+    use souvlaki::{
+        MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig,
+    };
 
     let config = PlatformConfig {
         display_name: "Deezer Client",
@@ -167,8 +172,8 @@ fn remember_start_url(app: &AppHandle, loaded: &tauri::Url) {
     let Some(lang) = loaded.path_segments().and_then(|mut s| s.next()) else {
         return;
     };
-    let is_lang = (2..=5).contains(&lang.len())
-        && lang.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+    let is_lang =
+        (2..=5).contains(&lang.len()) && lang.chars().all(|c| c.is_ascii_lowercase() || c == '-');
     let Ok(dir) = app.path().app_local_data_dir() else {
         return;
     };
@@ -190,9 +195,16 @@ fn main() {
         );
     #[cfg(windows)]
     let builder = builder.plugin(media_keys_plugin());
+    // Toggled from the Client tab in Deezer's account settings (settings.js).
+    let builder = builder.plugin(
+        tauri_plugin_autostart::Builder::new()
+            .arg(AUTOSTART_ARG)
+            .build(),
+    );
 
     builder
         .setup(|app| {
+            let autostarted = std::env::args().any(|arg| arg == AUTOSTART_ARG);
             let mut builder =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start_url(app.handle())))
                     .title("Deezer Client")
@@ -201,7 +213,12 @@ fn main() {
                     // Deezer's background, so the window isn't white until the page paints.
                     .background_color(Color(0, 0, 0, 255))
                     .visible(false)
+                    // Autostarted, it appears as usual but without taking the focus. Windows
+                    // would flash it in the taskbar instead, unless it can't be activated at all.
+                    .focused(!autostarted)
+                    .focusable(!autostarted)
                     .initialization_script(INJECT_JS)
+                    .initialization_script(SETTINGS_JS)
                     .on_page_load(|window, payload| {
                         if payload.event() == PageLoadEvent::Finished {
                             remember_start_url(window.app_handle(), payload.url());
@@ -236,6 +253,9 @@ fn main() {
             // Restore before showing so the window doesn't jump from the default placement.
             let _ = window.restore_state(StateFlags::all() - StateFlags::VISIBLE);
             window.show()?;
+            if autostarted {
+                window.set_focusable(true)?;
+            }
 
             setup_media_controls(app.handle());
             Ok(())
