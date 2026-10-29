@@ -522,15 +522,15 @@
       savedSignature = signature;
     }
 
-    async function restore() {
-      const player = loadedPlayer();
+    // The options for player.play() that load the saved queue, or null.
+    async function savedPlayOptions() {
       const [queue, position] = await Promise.all([
         request("readonly", (store) => store.get("queue")),
         request("readonly", (store) => store.get("position")),
       ]);
-      if (!queue || !position || player.isPlaying()) return;
+      if (!queue || !position) return null;
       savedSignature = position.signature;
-      await player.play({
+      return {
         data: queue.data,
         index: position.index,
         offset: position.offset,
@@ -539,10 +539,43 @@
         type: queue.type,
         id: queue.context?.ID,
         radio: false,
-      });
+      };
     }
 
-    // Waits for the player to load its default playlist before replacing it.
+    async function restore() {
+      const player = loadedPlayer();
+      if (replacedDefault || player.isPlaying()) return;
+      const options = await savedPlayOptions();
+      if (options) await player.play(options);
+    }
+
+    // Without a queue of its own, Deezer plays its default playlist
+    // (dzPlayer.play with context type player_default_playlist). The saved
+    // queue is played in its place, so the default track never shows.
+    let replacedDefault = false;
+    let dzPlayer = window.dzPlayer;
+    Object.defineProperty(window, "dzPlayer", {
+      configurable: true,
+      get: () => dzPlayer,
+      set(player) {
+        dzPlayer = player;
+        const play = player?.play;
+        if (typeof play !== "function" || play.dazzlerWrapped) return;
+        player.play = async function (options) {
+          if (!restored && !replacedDefault && options?.context?.TYPE === "player_default_playlist") {
+            const saved = await savedPlayOptions().catch(() => null);
+            if (saved) {
+              replacedDefault = true;
+              return play.call(this, saved);
+            }
+          }
+          return play.apply(this, arguments);
+        };
+        player.play.dazzlerWrapped = true;
+      },
+    });
+
+    // Waits for the player to load a track list before replacing it.
     function start() {
       if (!loadedPlayer()) {
         setTimeout(start, 500);
