@@ -22,6 +22,7 @@
 
   const mediaSessionHandlers = captureMediaSessionHandlers();
   cachePageContent();
+  filterHomePlaylists();
   hideSocialMedia();
   hideSidebarPlaylistOwners();
   addVolumeSlider();
@@ -145,6 +146,81 @@
       return Promise.resolve(
         new Response(cached.body, { headers: { "Content-Type": "application/json" } }),
       );
+    };
+  }
+
+  // --- Home page filter ---
+
+  // Removes playlists from the home page whose title or description contains
+  // one of these words, unless the user created them. The home page's sections
+  // come embedded in the HTML (window.__DZR_APP_STATE__) on the first load and
+  // from page.get afterwards; both are filtered.
+  function filterHomePlaylists() {
+    const WORDS = /pride|queer|diversity|empower/i;
+    const originalFetch = window.fetch;
+    let userId = null;
+
+    function isHidden(item) {
+      const data = item.data ?? {};
+      if (item.type !== "playlist" || String(data.PARENT_USER_ID) === userId) return false;
+      return WORDS.test(`${data.TITLE ?? item.title ?? ""} ${data.DESCRIPTION ?? item.description ?? ""}`);
+    }
+
+    // page: a page.get result, e.g. { page_name: "home", sections: [{ items: [...] }] }.
+    function filterPage(page) {
+      if (page?.page_name !== "home" || !Array.isArray(page.sections)) return page;
+      const sections = page.sections
+        .map((section) =>
+          Array.isArray(section.items)
+            ? { ...section, items: section.items.filter((item) => !isHidden(item)) }
+            : section,
+        )
+        .filter((section) => !Array.isArray(section.items) || section.items.length > 0);
+      return { ...page, sections };
+    }
+
+    // Filtered when read, so that the user's ID is known by then.
+    let appState;
+    let filtered = null;
+    Object.defineProperty(window, "__DZR_APP_STATE__", {
+      configurable: true,
+      get() {
+        if (filtered?.source !== appState || filtered.userId !== userId) {
+          filtered = { source: appState, userId, page: filterPage(appState) };
+        }
+        return filtered.page;
+      },
+      set(value) {
+        appState = value;
+      },
+    });
+
+    async function filterResponse(response) {
+      try {
+        const body = await response.clone().json();
+        body.results = filterPage(body.results);
+        return new Response(JSON.stringify(body), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      } catch {
+        return response;
+      }
+    }
+
+    window.fetch = function (input) {
+      const response = originalFetch.apply(this, arguments);
+      if (typeof input !== "string" || !input.includes("/ajax/gw-light.php")) return response;
+      const method = new URL(input, location.href).searchParams.get("method");
+      if (method === "deezer.getUserData") {
+        response
+          .then((res) => res.clone().json())
+          .then((body) => (userId = String(body.results.USER.USER_ID)))
+          .catch(() => {});
+        return response;
+      }
+      return method === "page.get" ? response.then(filterResponse) : response;
     };
   }
 
