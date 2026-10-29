@@ -4,6 +4,7 @@ A minimal Tauri v2 desktop wrapper for https://www.deezer.com.
 
 Improvements compared to the official client:
 - You can actually select the language of the interface
+- There is a volume slider that you can directly use
 - Does not show a media overlay when playing songs using media keys
 - Uses way less diskspace (3mb vs ~300mb)
 - Now without ideological newspeak when in German

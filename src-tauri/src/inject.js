@@ -24,6 +24,7 @@
   cachePageContent();
   hideSocialMedia();
   addVolumeSlider();
+  smoothProgressBar();
   const resume = resumePlayback();
 
   // Called from main.rs.
@@ -247,6 +248,135 @@
       mount();
       new MutationObserver(mount).observe(document.body, { childList: true, subtree: true });
     });
+  }
+
+  // --- Progress bar ---
+
+  // Deezer only updates the progress bar about four times a second, and its
+  // dot (the range input's thumb) in whole seconds, so both move in steps.
+  // Between its updates, this advances them every frame from the last
+  // reported position. Both are drawn with transforms and clipping, which
+  // unlike widths and the native thumb aren't rounded to whole pixels.
+  function smoothProgressBar() {
+    // Stops advancing if the player stalls (e.g. buffering) without reporting it.
+    const MAX_EXTRAPOLATION_S = 0.5;
+    // The player reports the old position for a moment after a seek.
+    const SEEK_TIMEOUT_MS = 1500;
+    const SEEK_TOLERANCE = 0.01;
+    const TRACK = '.slider-track:has(> [data-testid="progress_bar"])';
+    let lastPosition = null;
+    let lastTime = 0;
+    let dragging = false;
+    // While a seek is pending: its target (0-1), its distance (0-1) from the
+    // position before it, and when to stop waiting for it.
+    let seek = null;
+
+    // --deezer-client-progress (0-1) and --deezer-client-progress-px are set in frame.
+    addStyle(`
+      ${TRACK} > .slider-track-active {
+        width: 100% !important;
+        clip-path: inset(0 calc(100% - var(--deezer-client-progress, 0) * 100%) 0 0 round 4px);
+      }
+      ${TRACK} > .slider-track-input::-webkit-slider-thumb {
+        opacity: 0 !important;
+      }
+      ${TRACK}::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: -6px;
+        width: 12px;
+        height: 12px;
+        margin-top: -6px;
+        box-sizing: border-box;
+        border: 1px solid var(--tempo-colors-border-neutral-primary-default);
+        border-radius: 50%;
+        background-color: var(--tempo-colors-background-accent-onDark-default);
+        transform: translateX(var(--deezer-client-progress-px, 0px));
+        pointer-events: none;
+      }
+      .slider-autohide:not(.is-active) > ${TRACK}::after {
+        opacity: 0;
+      }
+    `);
+
+    function progressInput() {
+      return document.querySelector('[data-testid="progress_bar"]');
+    }
+
+    // The position to show (0-1) while playing, or null to show Deezer's.
+    function smoothedProgress(now) {
+      const player = window.dzPlayer;
+      const duration = player?.getDuration?.();
+      if (!player?.isPlaying?.() || !(duration > 0)) return null;
+      const position = player.getPosition();
+      if (seek) {
+        // Seeks can land a little off the target, so getting much closer counts too.
+        const distance = Math.abs(position / duration - seek.target);
+        const arrived = distance <= SEEK_TOLERANCE || distance < seek.distance / 2;
+        if (!arrived && now < seek.until) return seek.target;
+        seek = null;
+      }
+      if (position !== lastPosition) {
+        lastPosition = position;
+        lastTime = now;
+      }
+      const elapsed = Math.min((now - lastTime) / 1000, MAX_EXTRAPOLATION_S);
+      return Math.min(1, (position + elapsed) / duration);
+    }
+
+    function frame(now) {
+      requestAnimationFrame(frame);
+      const input = progressInput();
+      const track = input?.parentElement;
+      if (!track) return;
+      // Lets clicks land between whole seconds; they are floored on release.
+      if (input.step !== "any") input.step = "any";
+      let progress = dragging ? null : smoothedProgress(now);
+      if (progress === null) {
+        lastPosition = null;
+        progress = dragging
+          ? Number(input.value) / Number(input.max)
+          : (parseFloat(track.querySelector(".slider-track-active")?.style.width) || 0) / 100;
+      }
+      track.style.setProperty("--deezer-client-progress", progress);
+      track.style.setProperty(
+        "--deezer-client-progress-px",
+        `${progress * track.getBoundingClientRect().width}px`,
+      );
+    }
+
+    // Leaves the bar to Deezer while seeking with the mouse, and until the
+    // player reports the new position. Captured, so nothing can stop them first.
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (e.target.closest?.('[data-testid="progress_bar"]')) dragging = true;
+      },
+      true,
+    );
+    for (const type of ["pointerup", "pointercancel"]) {
+      document.addEventListener(
+        type,
+        () => {
+          const input = progressInput();
+          const player = window.dzPlayer;
+          const duration = player?.getDuration?.();
+          if (dragging && input && duration > 0) {
+            // Deezer seeks to the input's value on mouseup, which comes after this.
+            // Setting it earlier, while dragging, would make React skip Deezer's
+            // change handler.
+            input.value = String(Math.floor(input.value));
+            const target = Number(input.value) / Number(input.max);
+            const distance = Math.abs(player.getPosition() / duration - target);
+            seek = { target, distance, until: performance.now() + SEEK_TIMEOUT_MS };
+          }
+          dragging = false;
+        },
+        true,
+      );
+    }
+    requestAnimationFrame(frame);
   }
 
   // --- Resume playback ---
