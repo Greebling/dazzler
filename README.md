@@ -1,8 +1,8 @@
-# Deezer Client (Unofficial)
+# Dazzler
 
-A minimal desktop wrapper for https://www.deezer.com based on the Deezer web version.
+Dazzler is an unofficial, minimal desktop wrapper alternative for https://www.deezer.com.
 
-Improvements compared to the official client:
+Improvements compared to the official Deezer client:
 - You can actually select the language of the interface
 - There is a volume slider that you can directly use
 - Does not show a media overlay when playing songs using media keys
@@ -16,7 +16,7 @@ Tested on Windows - Linux and macOS builds are untested.
 
 
 ## Settings
-You can find the client settings under ```Account Settings -> Client```
+You can find the Dazzler settings under ```Account Settings -> Dazzler```
 
 ## Commands
 

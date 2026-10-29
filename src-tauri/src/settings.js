@@ -1,13 +1,13 @@
-// Injected into deezer.com: adds a "Client" tab with the client's own settings
+// Injected into deezer.com: adds a "Dazzler" tab with the client's own settings
 // to Deezer's account settings page.
 (() => {
-  if (window.__deezerClientSettings || window.top !== window) return;
-  window.__deezerClientSettings = true;
+  if (window.__dazzlerSettings || window.top !== window) return;
+  window.__dazzlerSettings = true;
 
-  const TAB_ID = "deezer-client-tab";
-  const PANEL_ID = "deezer-client-settings";
-  // Set on #page_account while the Client tab is open.
-  const OPEN_CLASS = "deezer-client-settings-open";
+  const TAB_ID = "dazzler-tab";
+  const PANEL_ID = "dazzler-settings";
+  // Set on #page_account while the Dazzler tab is open.
+  const OPEN_CLASS = "dazzler-settings-open";
 
   // Mirrors the styles of Deezer's own settings tabs, whose generated class
   // names change between builds.
@@ -20,7 +20,7 @@
       width: 100%;
       padding: var(--tempo-space-spacing-xl);
     }
-    #${PANEL_ID} .deezer-client-card {
+    #${PANEL_ID} .dazzler-card {
       width: 100%;
       max-width: var(--tempo-sizes-container-lg);
       padding: var(--tempo-space-spacing-xl);
@@ -43,29 +43,29 @@
       border-color: inherit;
       opacity: 0.6;
     }
-    #${PANEL_ID} .deezer-client-setting {
+    #${PANEL_ID} .dazzler-setting {
       display: flex;
       align-items: center;
     }
-    #${PANEL_ID} .deezer-client-label {
+    #${PANEL_ID} .dazzler-label {
       margin-inline-end: var(--tempo-space-spacing-m);
       font-weight: var(--tempo-fontWeights-medium);
       font-size: var(--tempo-fontSizes-sm);
       color: var(--tempo-colors-text-neutral-primary-default);
     }
-    #${PANEL_ID} .deezer-client-help {
+    #${PANEL_ID} .dazzler-help {
       font-size: var(--tempo-fontSizes-xs);
       line-height: var(--tempo-lineHeights-normal);
       color: var(--tempo-colors-text-neutral-secondary-default);
     }
-    #${PANEL_ID} .deezer-client-switch {
+    #${PANEL_ID} .dazzler-switch {
       --track-width: 1.875rem;
       --track-height: 1rem;
       position: relative;
       display: inline-block;
       line-height: 0;
     }
-    #${PANEL_ID} .deezer-client-switch input {
+    #${PANEL_ID} .dazzler-switch input {
       position: absolute;
       width: 1px;
       height: 1px;
@@ -73,7 +73,7 @@
       overflow: hidden;
       clip: rect(0, 0, 0, 0);
     }
-    #${PANEL_ID} .deezer-client-switch-track {
+    #${PANEL_ID} .dazzler-switch-track {
       display: inline-flex;
       box-sizing: content-box;
       width: var(--track-width);
@@ -85,7 +85,7 @@
       transition-property: var(--tempo-transition-property-common);
       transition-duration: var(--tempo-transition-duration-fast);
     }
-    #${PANEL_ID} .deezer-client-switch-thumb {
+    #${PANEL_ID} .dazzler-switch-thumb {
       width: var(--track-height);
       height: var(--track-height);
       border-radius: inherit;
@@ -93,14 +93,14 @@
       transition-property: transform;
       transition-duration: var(--tempo-transition-duration-normal);
     }
-    #${PANEL_ID} input:checked + .deezer-client-switch-track {
+    #${PANEL_ID} input:checked + .dazzler-switch-track {
       background: var(--tempo-colors-background-accent-primary-default);
     }
-    #${PANEL_ID} input:checked + * > .deezer-client-switch-thumb {
+    #${PANEL_ID} input:checked + * > .dazzler-switch-thumb {
       transform: translateX(calc(var(--track-width) - var(--track-height)));
     }
-    #${PANEL_ID} input:disabled + .deezer-client-switch-track { cursor: not-allowed; }
-    #${PANEL_ID} input:focus-visible + .deezer-client-switch-track {
+    #${PANEL_ID} input:disabled + .dazzler-switch-track { cursor: not-allowed; }
+    #${PANEL_ID} input:focus-visible + .dazzler-switch-track {
       outline: 2px solid var(--tempo-colors-border-accent-primary-default);
       outline-offset: 2px;
     }
@@ -115,7 +115,7 @@
     const tab = document.createElement("li");
     tab.id = TAB_ID;
     tab.className = "navbar-item";
-    tab.innerHTML = `<a class="chakra-text navbar-link" role="tab" tabindex="0" aria-selected="false">Client</a>`;
+    tab.innerHTML = `<a class="chakra-text navbar-link" role="tab" tabindex="0" aria-selected="false">Dazzler</a>`;
     // Deezer's link styles come from generated classes; copied from a sibling when mounting.
     return tab;
   }
@@ -124,20 +124,20 @@
     const panel = document.createElement("div");
     panel.id = PANEL_ID;
     panel.innerHTML = `
-      <div class="deezer-client-card">
-        <h2>Client</h2>
+      <div class="dazzler-card">
+        <h2>Dazzler</h2>
         <hr>
-        <div class="deezer-client-setting">
-          <label class="deezer-client-label" for="deezer-client-autostart">Autostart</label>
-          <label class="deezer-client-switch">
-            <input id="deezer-client-autostart" type="checkbox" role="switch"
-              aria-describedby="deezer-client-autostart-help" disabled>
-            <span class="deezer-client-switch-track" aria-hidden="true">
-              <span class="deezer-client-switch-thumb"></span>
+        <div class="dazzler-setting">
+          <label class="dazzler-label" for="dazzler-autostart">Autostart</label>
+          <label class="dazzler-switch">
+            <input id="dazzler-autostart" type="checkbox" role="switch"
+              aria-describedby="dazzler-autostart-help" disabled>
+            <span class="dazzler-switch-track" aria-hidden="true">
+              <span class="dazzler-switch-thumb"></span>
             </span>
           </label>
         </div>
-        <div class="deezer-client-help" id="deezer-client-autostart-help">
+        <div class="dazzler-help" id="dazzler-autostart-help">
           Start the client in the background when you log in.
         </div>
       </div>`;
@@ -151,12 +151,12 @@
     function refresh() {
       invoke("is_enabled")
         .then(show)
-        .catch((err) => console.error("deezer-client: autostart unavailable", err));
+        .catch((err) => console.error("dazzler: autostart unavailable", err));
     }
 
     toggle.addEventListener("change", () => {
       invoke(toggle.checked ? "enable" : "disable")
-        .catch((err) => console.error("deezer-client: changing autostart failed", err))
+        .catch((err) => console.error("dazzler: changing autostart failed", err))
         .finally(refresh);
     });
     return { panel, refresh };

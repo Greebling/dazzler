@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Deezer Client (Unofficial)",
-  "mainBinaryName": "Deezer Client (Unofficial)",
-  "identifier": "unofficial.deezerclient",
+  "productName": "Dazzler",
+  "mainBinaryName": "Dazzler",
+  "identifier": "unofficial.dazzler",
   "build": {
     "frontendDist": "../dist"
   },

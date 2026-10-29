@@ -1,6 +1,6 @@
 // Injected into deezer.com before the page's own scripts run.
 (() => {
-  if (window.__deezerClient || window.top !== window) return;
+  if (window.__dazzler || window.top !== window) return;
 
   // Deezer's player controls (window.playerProxy.control) per media action.
   const MEDIA_CONTROLS = {
@@ -30,7 +30,7 @@
   const resume = resumePlayback();
 
   // Called from main.rs.
-  window.__deezerClient = {
+  window.__dazzler = {
     // action: "playpause", "play", "pause", "nexttrack" or "previoustrack".
     media(action) {
       runMediaAction(action);
@@ -271,22 +271,22 @@
 
     addStyle(`
       [data-testid^="volume_button"] { display: none !important; }
-      #deezer-client-volume {
+      #dazzler-volume {
         width: 140px;
         margin: 0 16px 0 0;
         align-self: center;
         padding: 2px 0;
       }
-      #deezer-client-volume .slider-track-default {
+      #dazzler-volume .slider-track-default {
         background-color: var(--tempo-colors-background-neutral-tertiary-default, #232326);
       }
-      #deezer-client-volume .slider-track-active {
+      #dazzler-volume .slider-track-active {
         background-color: var(--tempo-colors-background-accent-primary-default, #97b5ff);
       }
     `);
 
     const slider = document.createElement("div");
-    slider.id = "deezer-client-volume";
+    slider.id = "dazzler-volume";
     slider.className = "slider";
     slider.innerHTML = `
       <div class="slider-track">
@@ -361,11 +361,11 @@
     // position before it, and when to stop waiting for it.
     let seek = null;
 
-    // --deezer-client-progress (0-1) and --deezer-client-progress-px are set in frame.
+    // --dazzler-progress (0-1) and --dazzler-progress-px are set in frame.
     addStyle(`
       ${TRACK} > .slider-track-active {
         width: 100% !important;
-        clip-path: inset(0 calc(100% - var(--deezer-client-progress, 0) * 100%) 0 0 round 4px);
+        clip-path: inset(0 calc(100% - var(--dazzler-progress, 0) * 100%) 0 0 round 4px);
       }
       ${TRACK} > .slider-track-input::-webkit-slider-thumb {
         opacity: 0 !important;
@@ -382,7 +382,7 @@
         border: 1px solid var(--tempo-colors-border-neutral-primary-default);
         border-radius: 50%;
         background-color: var(--tempo-colors-background-accent-onDark-default);
-        transform: translateX(var(--deezer-client-progress-px, 0px));
+        transform: translateX(var(--dazzler-progress-px, 0px));
         pointer-events: none;
       }
       .slider-autohide:not(.is-active) > ${TRACK}::after {
@@ -429,9 +429,9 @@
           ? Number(input.value) / Number(input.max)
           : (parseFloat(track.querySelector(".slider-track-active")?.style.width) || 0) / 100;
       }
-      track.style.setProperty("--deezer-client-progress", progress);
+      track.style.setProperty("--dazzler-progress", progress);
       track.style.setProperty(
-        "--deezer-client-progress-px",
+        "--dazzler-progress-px",
         `${progress * track.getBoundingClientRect().width}px`,
       );
     }
@@ -474,7 +474,7 @@
   // Deezer's web player always starts with a default playlist, so the queue,
   // track and position are saved here and restored on startup.
   function resumePlayback() {
-    const DB_NAME = "deezer-client";
+    const DB_NAME = "dazzler";
     const STORE = "resume";
     const SAVE_INTERVAL_MS = 3000;
     const db = openDatabase();
@@ -549,7 +549,7 @@
         return;
       }
       restore()
-        .catch((err) => console.error("deezer-client: restore failed", err))
+        .catch((err) => console.error("dazzler: restore failed", err))
         .finally(() => {
           restored = true;
           setInterval(() => save().catch(() => {}), SAVE_INTERVAL_MS);

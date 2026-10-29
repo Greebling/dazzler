@@ -12,7 +12,7 @@ const source = join(iconsDir, "icon.png");
 const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 
 // `tauri icon` rewrites icon.png in the output folder, so work from a copy and put the original back.
-const tmp = mkdtempSync(join(tmpdir(), "deezer-client-icons-"));
+const tmp = mkdtempSync(join(tmpdir(), "dazzler-icons-"));
 const input = join(tmp, "icon.png");
 copyFileSync(source, input);
 try {

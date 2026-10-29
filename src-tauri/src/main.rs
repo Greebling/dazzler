@@ -50,7 +50,7 @@ const LINUX_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.
 /// Forwards a media action ("playpause", "play", "pause", "nexttrack", "previoustrack") to inject.js.
 fn send_media_action(app: &AppHandle, action: &str) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(format!("window.__deezerClient?.media('{action}')"));
+        let _ = window.eval(format!("window.__dazzler?.media('{action}')"));
     }
 }
 
@@ -99,8 +99,8 @@ fn setup_media_controls(app: &AppHandle) {
     };
 
     let config = PlatformConfig {
-        display_name: "Deezer Client",
-        dbus_name: "deezer_client",
+        display_name: "Dazzler",
+        dbus_name: "dazzler",
         hwnd: None,
     };
     let mut controls = match MediaControls::new(config) {
@@ -127,7 +127,7 @@ fn setup_media_controls(app: &AppHandle) {
         return;
     }
     let _ = controls.set_metadata(MediaMetadata {
-        title: Some("Deezer Client"),
+        title: Some("Dazzler"),
         ..Default::default()
     });
     let _ = controls.set_playback(MediaPlayback::Paused { progress: None });
@@ -142,7 +142,7 @@ fn close_gracefully(window: &Window, api: &CloseRequestApi) {
         return;
     };
     api.prevent_close();
-    let _ = webview.eval("window.__deezerClient?.beforeClose()");
+    let _ = webview.eval("window.__dazzler?.beforeClose()");
     let _ = app.save_window_state(StateFlags::all());
     let _ = window.hide();
     // Leaves time for the save to finish; the window is already hidden.
@@ -195,7 +195,7 @@ fn main() {
         );
     #[cfg(windows)]
     let builder = builder.plugin(media_keys_plugin());
-    // Toggled from the Client tab in Deezer's account settings (settings.js).
+    // Toggled from the Dazzler tab in Deezer's account settings (settings.js).
     let builder = builder.plugin(
         tauri_plugin_autostart::Builder::new()
             .arg(AUTOSTART_ARG)
@@ -207,7 +207,7 @@ fn main() {
             let autostarted = std::env::args().any(|arg| arg == AUTOSTART_ARG);
             let mut builder =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start_url(app.handle())))
-                    .title("Deezer Client")
+                    .title("Dazzler")
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(800.0, 600.0)
                     // Deezer's background, so the window isn't white until the page paints.

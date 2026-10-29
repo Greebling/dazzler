@@ -1,4 +1,4 @@
-/* Gendern zu Deutsch – Einstellungen für den Deezer-Client.
+/* Gendern zu Deutsch – Einstellungen für Dazzler.
  * Ersetzt das defaults.js der Erweiterung: Ohne Erweiterungs-API gibt es kein
  * chrome.storage, daher feste Standardwerte. */
 (function (root) {
