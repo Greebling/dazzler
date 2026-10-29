@@ -23,6 +23,7 @@
   const mediaSessionHandlers = captureMediaSessionHandlers();
   cachePageContent();
   hideSocialMedia();
+  hideSidebarPlaylistOwners();
   addVolumeSlider();
   smoothProgressBar();
   const resume = resumePlayback();
@@ -168,6 +169,19 @@
     const iconSvgs = icons.map((name) => `svg[data-testid^="${name}"]`).join(", ");
     const social = `:is(${links}), :is(a, button):has(${iconSvgs})`;
     addStyle(`${social}, li:has(> :is(${social})) { display: none !important; }`);
+  }
+
+  // --- Sidebar playlists ---
+
+  // Hides the "by <owner>" line under each playlist in the left sidebar.
+  // Only the sidebar's playlist rows have the playlist-item class; each holds
+  // the cover and a column with the title and that line.
+  function hideSidebarPlaylistOwners() {
+    addStyle(`
+      :is(.playlist-item, .playlist-item-disabled) > :nth-child(2) > :nth-child(2) {
+        display: none !important;
+      }
+    `);
   }
 
   // --- Volume slider ---
