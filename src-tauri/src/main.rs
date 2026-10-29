@@ -13,7 +13,25 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 const DEEZER_URL: &str = "https://www.deezer.com/";
 const INJECT_JS: &str = include_str!("inject.js");
 
-// "Gendern zu Deutsch" content scripts, in the extension's manifest order.
+// Facebook, X, Instagram and TikTok, including their CDNs and tracking endpoints.
+#[cfg(windows)]
+const BLOCKED_DOMAINS: [&str; 13] = [
+    "facebook.com",
+    "facebook.net",
+    "fbcdn.net",
+    "fb.com",
+    "instagram.com",
+    "cdninstagram.com",
+    "twitter.com",
+    "twimg.com",
+    "x.com",
+    "t.co",
+    "tiktok.com",
+    "tiktokcdn.com",
+    "tiktokv.com",
+];
+
+// Content scripts to remove gender forms in german
 const GZD_SCRIPTS: [&str; 4] = [
     include_str!("gzd/defaults.js"),
     include_str!("gzd/data/lexicon.js"),
@@ -197,12 +215,19 @@ fn main() {
             // shortcuts handle the keys instead. They reach the page without a user gesture,
             // so autoplay must be allowed for them to start playback.
             // The first three features are wry's defaults, which this call replaces.
+            // Requests to the blocked social networks fail as if their domains didn't exist.
             #[cfg(windows)]
             {
-                builder = builder.additional_browser_args(
+                let blocked = BLOCKED_DOMAINS
+                    .iter()
+                    .map(|domain| format!("MAP {domain} ~NOTFOUND, MAP *.{domain} ~NOTFOUND"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                builder = builder.additional_browser_args(&format!(
                     "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,HardwareMediaKeyHandling \
-                     --autoplay-policy=no-user-gesture-required",
-                );
+                     --autoplay-policy=no-user-gesture-required \
+                     --host-resolver-rules=\"{blocked}\"",
+                ));
             }
             for script in GZD_SCRIPTS {
                 builder = builder.initialization_script(script);
