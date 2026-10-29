@@ -25,6 +25,8 @@
   filterHomePlaylists();
   hideSocialMedia();
   hideSidebarPlaylistOwners();
+  hideQuickAccessHint();
+  hideQuickAccessPins();
   moveArtistTourDatesDown();
   addVolumeSlider();
   smoothProgressBar();
@@ -259,6 +261,25 @@
         display: none !important;
       }
     `);
+  }
+
+  // --- Quick access hint ---
+
+  // Hides the hint box in the sidebar's quick access section ("Pinne deine
+  // Lieblingsmusik ... in deine Sidebar"). Deezer only shows it while this
+  // flag, which its close button sets, is missing from localStorage.
+  function hideQuickAccessHint() {
+    try {
+      localStorage.setItem("shouldHidePinTooltip", "true");
+    } catch {}
+  }
+
+  // --- Quick access pin icons ---
+
+  // Hides the thumbtack on the covers of the sidebar's quick access items and
+  // in their tooltips, the only places Deezer uses this icon.
+  function hideQuickAccessPins() {
+    addStyle(`svg[data-testid^="ThumbtackFilledIcon"] { display: none !important; }`);
   }
 
   // --- Artist tour dates ---
