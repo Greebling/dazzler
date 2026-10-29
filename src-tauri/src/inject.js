@@ -179,7 +179,19 @@
             : section,
         )
         .filter((section) => !Array.isArray(section.items) || section.items.length > 0);
-      return { ...page, sections };
+      return { ...page, sections: moveMixesBelowPlaylists(sections) };
+    }
+
+    // Moves the "Mixes inspired by..." section (found by its content source,
+    // as its title is localized) below the user's own playlists.
+    function moveMixesBelowPlaylists(sections) {
+      const source = (section) => section.section_id ?? "";
+      const mixes = sections.find((s) => source(s).includes("track_content-source_user-tops"));
+      const playlists = sections.find((s) => source(s).includes("playlists_content-source_user-favorites"));
+      if (!mixes || !playlists || sections.indexOf(mixes) > sections.indexOf(playlists)) return sections;
+      const rest = sections.filter((s) => s !== mixes);
+      rest.splice(rest.indexOf(playlists) + 1, 0, mixes);
+      return rest;
     }
 
     // Filtered when read, so that the user's ID is known by then.

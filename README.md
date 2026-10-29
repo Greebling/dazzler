@@ -4,9 +4,11 @@ Dazzler is an unofficial, minimal desktop wrapper alternative for https://www.de
 
 Improvements compared to the official Deezer client:
 - You can actually select the language of the interface
-- There is a volume slider that you can directly use
+- Has a volume slider that you can directly use
+- Your own playlist are now placed right below last played in the home screen
+- The play progress bar is now smoothly animated
 - Does not show a media overlay when playing songs using media keys
-- Uses way less diskspace (3mb vs 277mb)
+- Uses less diskspace (3mb vs 277mb)
 - Now without ideological newspeak when in German
 - Removes generated playlists with unwanted political messaging from the home screen
 
@@ -31,10 +33,3 @@ npm run build   # release build + installers for the current OS in src-tauri/tar
 Building needs the Tauri prerequisites (`libwebkit2gtk-4.1-dev` etc., see https://tauri.app/start/prerequisites/).
 Playback needs GStreamer plugins (`gstreamer1.0-plugins-good`, `-bad`, `gstreamer1.0-libav`):
 the .deb depends on them and the AppImage bundles them.
-
-## License
-
-Copyright (C) 2026 Greebling
-
-This program is free software: you can redistribute it and/or modify it under the terms of the
-GNU Affero General Public License Version 3 as published by the Free Software Foundation. See [LICENSE](LICENSE).
