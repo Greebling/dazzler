@@ -25,6 +25,7 @@
   filterHomePlaylists();
   hideSocialMedia();
   hideSidebarPlaylistOwners();
+  moveArtistTourDatesDown();
   addVolumeSlider();
   smoothProgressBar();
   const resume = resumePlayback();
@@ -256,6 +257,28 @@
     addStyle(`
       :is(.playlist-item, .playlist-item-disabled) > :nth-child(2) > :nth-child(2) {
         display: none !important;
+      }
+    `);
+  }
+
+  // --- Artist tour dates ---
+
+  // Moves the tour dates on artist pages below the discography. They are the
+  // last row of the section above it, so that section is dissolved
+  // (display: contents) into the flex column, and its rows take over its padding.
+  function moveArtistTourDatesDown() {
+    const tour = '[data-testid="last-concert-section"]';
+    const section = `.catalog-tab-discography > section:has(> ${tour})`;
+    addStyle(`
+      .catalog-tab-discography:has(> section > ${tour}) {
+        display: flex;
+        flex-direction: column;
+      }
+      ${section} { display: contents; }
+      ${section} > * { padding-inline: 40px; }
+      ${section} > ${tour} {
+        order: 1;
+        margin-top: 0 !important;
       }
     `);
   }
