@@ -312,6 +312,7 @@
   function addVolumeSlider() {
     const WHEEL_STEP = 5;
     const SYNC_INTERVAL_MS = 500;
+    const STORAGE_KEY = "dazzler-volume";
 
     addStyle(`
       [data-testid^="volume_button"] { display: none !important; }
@@ -351,12 +352,24 @@
       value = Math.max(0, Math.min(100, value));
       show(value);
       window.dzPlayer?.control?.setVolume(value / 100, true);
+      localStorage.setItem(STORAGE_KEY, String(value));
+    }
+
+    // Applies the volume of the previous session once the player exists.
+    let restored = false;
+    function restoreVolume(player) {
+      restored = true;
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved !== null && Number.isFinite(Number(saved))) {
+        player.control?.setVolume(Number(saved) / 100, true);
+      }
     }
 
     // Follows volume changes made elsewhere (e.g. muting, other devices).
     function syncFromPlayer() {
       const player = window.dzPlayer;
       if (!player || dragging) return;
+      if (!restored) restoreVolume(player);
       show(player.muted ? 0 : Math.round(player.volume * 100));
     }
 
@@ -372,10 +385,12 @@
     slider.addEventListener(
       "wheel",
       (e) => {
+        // Keeps the page behind the slider from scrolling too.
         e.preventDefault();
+        e.stopPropagation();
         setVolume(Number(input.value) + (e.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP));
       },
-      { passive: false },
+      { passive: false, capture: true },
     );
     setInterval(syncFromPlayer, SYNC_INTERVAL_MS);
     onReady(() => {
