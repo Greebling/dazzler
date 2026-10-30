@@ -28,6 +28,7 @@
   hideQuickAccessHint();
   hideQuickAccessPins();
   moveArtistTourDatesDown();
+  enlargePlayerBar();
   addVolumeSlider();
   smoothProgressBar();
   const resume = resumePlayback();
@@ -326,6 +327,22 @@
         order: 1;
         margin-top: 0 !important;
       }
+    `);
+  }
+
+  // --- Player bar ---
+
+  // Scales the bottom player bar (80px by default) with its content, and makes
+  // the page and the sidebar leave room for the taller bar.
+  function enlargePlayerBar() {
+    const SCALE = 1.3;
+    const height = Math.round(80 * SCALE);
+    const bar = 'div:has(> div > div > div > [data-testid^="play_button"])';
+    addStyle(`
+      ${bar} {
+        zoom: ${SCALE};
+      }
+      .naboo, .page-topbar + div > div { padding-bottom: ${height}px !important; }
     `);
   }
 
