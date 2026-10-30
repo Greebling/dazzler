@@ -1,4 +1,4 @@
-/* Gendern zu Deutsch – Content-Script: wendet GenderCore auf Textknoten und Attribute der Seite an. */
+/* Gendern zu Deutsch – applies GenderCore to the page's text nodes and attributes. */
 (function () {
   'use strict';
 
@@ -11,23 +11,23 @@
     'SPAN', 'STRONG', 'SUB', 'SUP', 'U', 'FONT', 'TIME', 'WBR', 'DATA', 'INS', 'DEL']);
   const ATTRS = ['title', 'alt', 'placeholder', 'aria-label'];
   const ATTR_SELECTOR = ATTRS.map(a => '[' + a + ']').join(',');
-  // Beginn eines Textknotens, der ein im vorigen Knoten begonnenes Wort fortsetzt: Lehrer<em>*innen</em>
+  // Start of a text node that continues a word from the previous node: Lehrer<em>*innen</em>
   const SPLIT_START = /^(?:[*:_/·•|]-?(?:innen|in|Innen|In)|\((?:innen|in|Innen|In)\)|Innen|In)(?![\p{L}\p{N}])/u;
   const MEMO_MAX = 5000;
   const SLICE_MS = 10;
 
-  let opts = null;
-  let observer = null;
-  const memo = new Map();       // Originaltext -> Ergebnis (gleiche Texte kommen oft mehrfach vor)
-  const written = new WeakMap(); // Textknoten -> zuletzt von uns geschriebener Inhalt
-  const queue = [];             // noch zu durchsuchende Teilbäume
-  let pending = [];             // gesammelte, noch nicht bearbeitete Textknoten
+  let opts: GzDOptions | null = null;
+  let observer: MutationObserver | null = null;
+  const memo = new Map<string, GzDResult>(); // original text -> result; the same texts often repeat
+  const written = new WeakMap<Node, string>(); // text node -> content we last wrote
+  const queue: Node[] = []; // subtrees still to scan
+  let pending: Text[] = []; // collected text nodes not yet processed
   let pendingPos = 0;
   let scheduled = false;
 
-  // ------------------------------------------------------------ Text verarbeiten
+  // ------------------------------------------------------------ Processing
 
-  function transformText(text) {
+  function transformText(text: string) {
     let r = memo.get(text);
     if (!r) {
       r = Core.transform(text, opts);
@@ -37,37 +37,37 @@
     return r.text;
   }
 
-  function isSkipped(el) {
-    return SKIP_TAGS.has(el.tagName) || el.isContentEditable || el.getAttribute('role') === 'textbox';
+  function isSkipped(el: Element) {
+    return SKIP_TAGS.has(el.tagName) || (el as HTMLElement).isContentEditable || el.getAttribute('role') === 'textbox';
   }
 
-  function collectTextNodes(root) {
+  function collectTextNodes(root: Node): Text[] {
     if (root.nodeType === Node.TEXT_NODE) {
       const p = root.parentElement;
-      return p && !p.closest('script, style, noscript, textarea, code, pre, kbd, samp, [contenteditable=""], [contenteditable="true"]') ? [root] : [];
+      return p && !p.closest('script, style, noscript, textarea, code, pre, kbd, samp, [contenteditable=""], [contenteditable="true"]') ? [root as Text] : [];
     }
     if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return [];
-    if (root.nodeType === Node.ELEMENT_NODE && (isSkipped(root) || root.closest('[contenteditable=""], [contenteditable="true"], code, pre'))) return [];
-    const nodes = [];
+    if (root.nodeType === Node.ELEMENT_NODE && (isSkipped(root as Element) || (root as Element).closest('[contenteditable=""], [contenteditable="true"], code, pre'))) return [];
+    const nodes: Text[] = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
-        if (n.nodeType === Node.ELEMENT_NODE) return isSkipped(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
-        return /\S/.test(n.data) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        if (n.nodeType === Node.ELEMENT_NODE) return isSkipped(n as Element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        return /\S/.test((n as Text).data) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
       },
     });
     let n;
-    while ((n = walker.nextNode())) nodes.push(n);
+    while ((n = walker.nextNode())) nodes.push(n as Text);
     return nodes;
   }
 
-  function blockOf(node) {
+  function blockOf(node: Node) {
     let e = node.parentElement;
     while (e && INLINE_TAGS.has(e.tagName)) e = e.parentElement;
     return e;
   }
 
-  /** Zieht Genderendungen, die in einem eigenen Knoten stehen, an das Wort im vorigen Knoten. */
-  function joinSplitWords(nodes) {
+  /** Moves gender endings that sit in their own node onto the word in the previous node. */
+  function joinSplitWords(nodes: Text[]) {
     for (let i = 0; i < nodes.length - 1; i++) {
       const a = nodes[i];
       const b = nodes[i + 1];
@@ -80,7 +80,7 @@
     }
   }
 
-  function processTextNode(node) {
+  function processTextNode(node: Text) {
     const text = node.data;
     if (text.length < 4 || written.get(node) === text || !node.isConnected) return;
     const out = transformText(text);
@@ -88,10 +88,11 @@
     written.set(node, out);
   }
 
-  function processAttributes(root) {
-    if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return;
+  function processAttributes(node: Node) {
+    if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_NODE) return;
+    const root = node as Element | Document;
     const els = root.querySelectorAll ? Array.from(root.querySelectorAll(ATTR_SELECTOR)) : [];
-    if (root.nodeType === Node.ELEMENT_NODE && root.matches(ATTR_SELECTOR)) els.push(root);
+    if (root.nodeType === Node.ELEMENT_NODE && (root as Element).matches(ATTR_SELECTOR)) els.push(root as Element);
     for (const el of els) {
       for (const a of ATTRS) {
         const v = el.getAttribute(a);
@@ -103,9 +104,9 @@
     }
   }
 
-  // ------------------------------------------------------------ Warteschlange (verhindert Ruckeln)
+  // ------------------------------------------------------------ Queue
 
-  function enqueue(node, now) {
+  function enqueue(node: Node, now?: boolean) {
     queue.push(node);
     if (!scheduled) {
       scheduled = true;
@@ -115,18 +116,18 @@
     }
   }
 
-  /** Arbeitet in Häppchen von SLICE_MS, damit auch große Seiten nicht ruckeln. */
+  /** Works in slices of SLICE_MS so that large pages don't stutter. */
   function flush() {
     scheduled = false;
     const start = performance.now();
     const timeUp = () => performance.now() - start > SLICE_MS;
     while (pendingPos < pending.length || queue.length) {
       if (pendingPos < pending.length) {
-        // Zeit nur alle 50 Knoten prüfen; performance.now() ist nicht kostenlos
+        // Checks the time only every 50 nodes, as performance.now() isn't free
         const end = Math.min(pendingPos + 50, pending.length);
         while (pendingPos < end) processTextNode(pending[pendingPos++]);
       } else {
-        const root = queue.shift();
+        const root = queue.shift()!;
         if (!root.isConnected) continue;
         pending = collectTextNodes(root);
         pendingPos = 0;
@@ -152,7 +153,7 @@
     observer = new MutationObserver(mutations => {
       for (const m of mutations) {
         if (m.type === 'characterData') {
-          if (written.get(m.target) !== m.target.data) enqueue(m.target);
+          if (written.get(m.target) !== (m.target as CharacterData).data) enqueue(m.target);
         } else {
           for (const n of m.addedNodes) enqueue(n);
         }
@@ -170,13 +171,12 @@
       doppelformen: settings.doppelformen,
       partizip: settings.partizip,
     };
-    // Lexikon wird als Content-Script mitgeladen (data/lexicon.js), kein Umweg über das Hintergrundskript
     Core.loadLexicon(globalThis.GENDER_LEXICON || '');
     enqueue(document.body || document.documentElement, true);
     observe();
   }
 
-  // Wird vor dem Laden der Seite eingeschleust, daher auf das DOM warten
+  // Injected before the page loads, so wait for the DOM
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
 })();

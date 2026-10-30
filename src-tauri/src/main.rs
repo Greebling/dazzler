@@ -11,8 +11,8 @@ use tauri::{
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 const DEEZER_URL: &str = "https://www.deezer.com/";
-const INJECT_JS: &str = include_str!("inject.js");
-const SETTINGS_JS: &str = include_str!("settings.js");
+const INJECT_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/inject.js"));
+const SETTINGS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/settings.js"));
 
 // Passed by the autostart entry, so an autostarted client doesn't take the focus.
 const AUTOSTART_ARG: &str = "--autostart";
@@ -37,17 +37,17 @@ const BLOCKED_DOMAINS: [&str; 13] = [
 
 // Content scripts to remove gender forms in german
 const GZD_SCRIPTS: [&str; 4] = [
-    include_str!("gzd/defaults.js"),
-    include_str!("gzd/data/lexicon.js"),
-    include_str!("gzd/gender-core.js"),
-    include_str!("gzd/content.js"),
+    include_str!(concat!(env!("OUT_DIR"), "/js/gzd/defaults.js")),
+    include_str!(concat!(env!("OUT_DIR"), "/js/gzd/data/lexicon.js")),
+    include_str!(concat!(env!("OUT_DIR"), "/js/gzd/gender-core.js")),
+    include_str!(concat!(env!("OUT_DIR"), "/js/gzd/content.js")),
 ];
 
 // Deezer may reject WebKitGTK's own user agent as an unsupported browser.
 #[cfg(target_os = "linux")]
 const LINUX_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
-/// Forwards a media action ("playpause", "play", "pause", "nexttrack", "previoustrack") to inject.js.
+/// Forwards a media action ("playpause", "play", "pause", "nexttrack", "previoustrack") to inject.ts.
 fn send_media_action(app: &AppHandle, action: &str) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval(format!("window.__dazzler?.media('{action}')"));
@@ -135,7 +135,7 @@ fn setup_media_controls(app: &AppHandle) {
     std::mem::forget(controls);
 }
 
-/// Lets inject.js pause playback and save the current queue and position before exiting.
+/// Lets inject.ts pause playback and save the current queue and position before exiting.
 fn close_gracefully(window: &Window, api: &CloseRequestApi) {
     let app = window.app_handle().clone();
     let Some(webview) = app.get_webview_window("main") else {
@@ -195,7 +195,7 @@ fn main() {
         );
     #[cfg(windows)]
     let builder = builder.plugin(media_keys_plugin());
-    // Toggled from the Dazzler tab in Deezer's account settings (settings.js).
+    // Toggled from the Dazzler tab in Deezer's account settings (settings.ts).
     let builder = builder.plugin(
         tauri_plugin_autostart::Builder::new()
             .arg(AUTOSTART_ARG)

@@ -1,0 +1,16 @@
+{
+  // The injected scripts in src-tauri/src. src-tauri/build.rs compiles them into
+  // Cargo's OUT_DIR, where main.rs includes them from; outDir is only the fallback
+  // for running tsc by hand.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": [],
+    "strict": true,
+    "noEmitOnError": true,
+    "rootDir": "src-tauri/src",
+    "outDir": "src-tauri/target/js",
+    "newLine": "lf"
+  },
+  "include": ["src-tauri/src/**/*.ts"]
+}

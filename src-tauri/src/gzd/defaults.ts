@@ -1,10 +1,9 @@
-/* Gendern zu Deutsch – Einstellungen für Dazzler.
- * Ersetzt das defaults.js der Erweiterung: Ohne Erweiterungs-API gibt es kein
- * chrome.storage, daher feste Standardwerte. */
-(function (root) {
+/* Gendern zu Deutsch – settings. Replaces the browser extension's defaults.js:
+ * there is no chrome.storage here, so the values are fixed. */
+(function (root: typeof globalThis) {
   'use strict';
 
-  const DEFAULT_SETTINGS = {
+  const DEFAULT_SETTINGS: GzDSettingsValues = {
     doppelformen: true,
     partizip: true,
     blocklist: '',

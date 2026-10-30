@@ -107,8 +107,8 @@
   `;
 
   // Commands of the autostart plugin, registered in main.rs.
-  function invoke(command) {
-    return window.__TAURI_INTERNALS__.invoke(`plugin:autostart|${command}`);
+  function invoke<T>(command: "is_enabled" | "enable" | "disable") {
+    return window.__TAURI_INTERNALS__.invoke<T>(`plugin:autostart|${command}`);
   }
 
   function createTab() {
@@ -141,15 +141,15 @@
           Start the client in the background when you log in.
         </div>
       </div>`;
-    const toggle = panel.querySelector("input");
+    const toggle = panel.querySelector("input")!;
 
-    function show(enabled) {
+    function show(enabled: boolean) {
       toggle.checked = enabled;
       toggle.disabled = false;
     }
 
     function refresh() {
-      invoke("is_enabled")
+      invoke<boolean>("is_enabled")
         .then(show)
         .catch((err) => console.error("dazzler: autostart unavailable", err));
     }
@@ -164,16 +164,16 @@
 
   const tab = createTab();
   const { panel, refresh } = createPanel();
-  const link = tab.firstElementChild;
+  const link = tab.firstElementChild as HTMLAnchorElement;
 
-  function setOpen(page, open) {
+  function setOpen(page: HTMLElement, open: boolean) {
     page.classList.toggle(OPEN_CLASS, open);
     tab.classList.toggle("active", open);
     link.setAttribute("aria-selected", String(open));
     // Only the highlight is removed from Deezer's selected tab, so it can be restored
     // without Deezer re-rendering (which it skips if that tab gets clicked again).
     const selected = page.querySelector(`.navbar-item:not(#${TAB_ID}) > [aria-selected="true"]`);
-    selected?.parentElement.classList.toggle("active", !open);
+    selected?.parentElement?.classList.toggle("active", !open);
   }
 
   link.addEventListener("click", () => {
@@ -195,7 +195,8 @@
     (e) => {
       const page = document.getElementById("page_account");
       if (!page?.classList.contains(OPEN_CLASS)) return;
-      if (e.target.closest?.(`#page_account [role="tab"]`) && !tab.contains(e.target)) {
+      const target = e.target as Element;
+      if (target.closest?.(`#page_account [role="tab"]`) && !tab.contains(target)) {
         setOpen(page, false);
       }
     },
@@ -206,7 +207,7 @@
   function mount() {
     const page = document.getElementById("page_account");
     const nav = page?.querySelector(".navbar-nav");
-    if (!nav) return;
+    if (!page || !nav) return;
     if (tab.parentElement !== nav) {
       const sibling = nav.querySelector(".navbar-link");
       link.className = sibling?.className ?? link.className;

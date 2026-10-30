@@ -1,66 +1,69 @@
 /*
- * Gendern zu Deutsch – Kernlogik.
+ * Gendern zu Deutsch – core logic. Pure text processing, no DOM access.
  *
- * Reine Textverarbeitung ohne DOM-Zugriff. Wird vom Content-Script, von der
- * Optionsseite (Testfeld) und von tests/test.html verwendet.
- *
- * Ablauf von transform():
- *   1. Weiche Trennstriche in gegenderten Wörtern entfernen
- *   2. Gegenderte Substantive (Lehrer*innen, LehrerInnen, Lehrer(in) …) über das
- *      Wiktionary-Lexikon auf die männliche Form zurückführen, Kasus aus dem
- *      Kontext (Artikel/Präposition davor) bestimmen
- *   3. Artikel- und Pronomenpaare (der*die, ein*e, jede*r, sie/er …)
- *   4. Doppelformen (Lehrerinnen und Lehrer)
- *   5. Partizipformen (Studierende, Mitarbeitende)
+ * transform() steps:
+ *   1. Remove soft hyphens inside gendered words
+ *   2. Gendered nouns (Lehrer*innen, LehrerInnen, Lehrer(in) …) -> masculine form,
+ *      via the Wiktionary lexicon; the case comes from the preceding article/preposition
+ *   3. Article and pronoun pairs (der*die, ein*e, jede*r, sie/er …)
+ *   4. Paired forms (Lehrerinnen und Lehrer)
+ *   5. Participles (Studierende, Mitarbeitende)
  *   6. man/frau
- *   7. Eigene Ersetzungen
+ *   7. Custom replacements
  */
-(function (root) {
+(function (root: typeof globalThis) {
   'use strict';
 
-  // ---------------------------------------------------------------- Grundbausteine
+  /** Forms of a masculine noun; the nominative is masc. */
+  type Entry = { masc: string; gen: string; dat: string; akk: string; pl: string; datPl: string };
+  type Kasus = 'nom' | 'gen' | 'dat' | 'akk';
+  type TextEdit = { start: number; end: number; text: string };
+  type Context = { kasus: Kasus; edits?: TextEdit[] };
+  type Word = { w: string; start: number; end?: number };
+  type ScanResult = { text: string; before?: string } | null;
+
+  // ---------------------------------------------------------------- Basics
 
   const SHY = '\\u00AD\\u200B\\u200C\\u200D\\u2060';
   const SHY_RE = new RegExp('[' + SHY + ']', 'g');
-  const MARK = '[*:_/·•|⁎∗＊]';                 // Genderzeichen
+  const MARK = '[*:_/·•|⁎∗＊]';                 // gender marks
   const MARK_RE = new RegExp(MARK);
-  const WB = '(?<![\\p{L}\\p{N}])';            // Wortanfang
-  const WE = '(?![\\p{L}\\p{N}])';             // Wortende
+  const WB = '(?<![\\p{L}\\p{N}])';            // word start
+  const WE = '(?![\\p{L}\\p{N}])';             // word end
 
-  /** Macht den Anfangsbuchstaben jedes Worts groß/klein-unabhängig: "von" -> "[Vv]on". */
-  function alt(words) {
+  /** Makes the first letter of each word case-insensitive: "von" -> "[Vv]on". */
+  function alt(words: string[]) {
     return '(?:' + words.map(w => '[' + w[0].toUpperCase() + w[0].toLowerCase() + ']' + w.slice(1)).join('|') + ')';
   }
 
-  function escapeRe(s) {
+  function escapeRe(s: string) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function capitalize(s) {
+  function capitalize(s: string) {
     return s ? s[0].toUpperCase() + s.slice(1) : s;
   }
 
-  function lowerFirst(s) {
+  function lowerFirst(s: string) {
     return s ? s[0].toLowerCase() + s.slice(1) : s;
   }
 
-  function matchCase(word, model) {
+  function matchCase(word: string, model: string) {
     if (model.length > 1 && model === model.toUpperCase() && /\p{Lu}/u.test(model)) return word.toUpperCase();
     return /^\p{Lu}/u.test(model) ? capitalize(word) : word;
   }
 
   /**
-   * Ersetzt alle Treffer von re (global) in text. fn(match, before) liefert
-   * entweder null (keine Änderung; Suche läuft ab dem nächsten Zeichen weiter,
-   * damit sich überlappende Kandidaten nicht gegenseitig verschlucken) oder
-   * { text, before? } – mit before lässt sich der bereits ausgegebene Text davor
-   * umschreiben (z. B. "die" -> "der"). before ist nur das Ende der bisherigen
-   * Ausgabe (mind. CONTEXT_CHARS Zeichen), damit lange Texte linear bleiben.
+   * Replaces all matches of the global regex re in text. fn(match, before) returns
+   * null to keep the match (the search resumes at the next character, so
+   * overlapping candidates aren't skipped), or { text, before? }, where before
+   * rewrites the output preceding the match (e.g. "die" -> "der"). before is only
+   * the tail of the output so far (at least CONTEXT_CHARS), keeping long texts linear.
    */
   const CONTEXT_CHARS = 160;
-  function scan(text, re, fn) {
+  function scan(text: string, re: RegExp, fn: (m: RegExpExecArray, before: string) => ScanResult) {
     re.lastIndex = 0;
-    const parts = [];
+    const parts: string[] = [];
     let last = 0;
     let m;
     while ((m = re.exec(text))) {
@@ -90,16 +93,16 @@
     return parts.join('');
   }
 
-  // ---------------------------------------------------------------- Lexikon
+  // ---------------------------------------------------------------- Lexicon
 
-  /** weibliche Singularform -> Eintrag { masc, gen, dat, akk, pl, datPl } */
-  let femIndex = new Map();
-  /** männliche Grundform -> Eintrag */
-  let mascIndex = new Map();
-  const femCache = new Map();
-  const mascCache = new Map();
+  /** feminine singular -> entry */
+  let femIndex = new Map<string, Entry>();
+  /** masculine nominative singular -> entry */
+  let mascIndex = new Map<string, Entry>();
+  const femCache = new Map<string, Entry | null>();
+  const mascCache = new Map<string, Entry | null>();
 
-  // Ergänzungen/Korrekturen, die im Wiktionary-Export fehlen (z. B. adjektivisch deklinierte Wörter)
+  // Additions and fixes missing from the Wiktionary export (e.g. words declined like adjectives)
   const OVERRIDES = [
     'Beamtin;Beamter;Beamten;Beamten;Beamten;Beamten;Beamten',
     'Chefin;Chef;+s;;;+s;+s',
@@ -108,12 +111,12 @@
     'Gästin;Gast;+es;;;Gäste;Gästen',
   ];
 
-  function decodeForm(form, base) {
+  function decodeForm(form: string | undefined, base: string) {
     if (!form) return base;
     return form[0] === '+' ? base + form.slice(1) : form;
   }
 
-  function addLine(line) {
+  function addLine(line: string) {
     const p = line.split(';');
     if (p.length < 2 || !p[1]) return;
     const masc = p[1];
@@ -130,7 +133,7 @@
     if (!mascIndex.has(masc)) mascIndex.set(masc, entry);
   }
 
-  function loadLexicon(data) {
+  function loadLexicon(data: string) {
     femIndex = new Map();
     mascIndex = new Map();
     femCache.clear();
@@ -144,17 +147,17 @@
     return femIndex.size;
   }
 
-  function withPrefix(prefix, entry, lower) {
-    const f = w => prefix + (lower ? lowerFirst(w) : w);
+  function withPrefix(prefix: string, entry: Entry, lower: boolean): Entry {
+    const f = (w: string) => prefix + (lower ? lowerFirst(w) : w);
     return {
       masc: f(entry.masc), gen: f(entry.gen), dat: f(entry.dat),
       akk: f(entry.akk), pl: f(entry.pl), datPl: f(entry.datPl),
     };
   }
 
-  /** Sucht ein Wort in einem Index, auch als Kompositum (Grundschullehrerin, Nicht-Expertin). */
-  function lookupCompound(word, index, cache, minTail) {
-    if (cache.has(word)) return cache.get(word);
+  /** Looks up a word in an index, also as a compound (Grundschullehrerin, Nicht-Expertin). */
+  function lookupCompound(word: string, index: Map<string, Entry>, cache: Map<string, Entry | null>, minTail: number): Entry | null {
+    if (cache.has(word)) return cache.get(word)!;
     let res = index.get(word) || null;
     if (!res) {
       const h = word.lastIndexOf('-');
@@ -175,21 +178,21 @@
     return res;
   }
 
-  const lookupFem = w => lookupCompound(w, femIndex, femCache, 5);
-  const lookupMasc = w => lookupCompound(w, mascIndex, mascCache, 4);
+  const lookupFem = (w: string) => lookupCompound(w, femIndex, femCache, 5);
+  const lookupMasc = (w: string) => lookupCompound(w, mascIndex, mascCache, 4);
 
-  const UMLAUT = { a: 'ä', o: 'ö', u: 'ü', A: 'Ä', O: 'Ö', U: 'Ü' };
+  const UMLAUT: Record<string, string> = { a: 'ä', o: 'ö', u: 'ü', A: 'Ä', O: 'Ö', U: 'Ü' };
 
-  /** Umlautet den letzten Vokal(-verbund): Arzt -> Ärzt, Bauer -> Bäuer, Koch -> Köch. */
-  function umlautLast(stem) {
+  /** Umlauts the last vowel (group): Arzt -> Ärzt, Bauer -> Bäuer, Koch -> Köch. */
+  function umlautLast(stem: string) {
     const m = /(au|[aou])([^aeiouäöü]*e?[^aeiouäöü]*)$/i.exec(stem);
     if (!m) return null;
     const v = m[1][0];
     return stem.slice(0, m.index) + UMLAUT[v] + m[1].slice(1) + m[2];
   }
 
-  /** Grobe Regeln für Wörter, die nicht im Lexikon stehen. */
-  function heuristicEntry(stem) {
+  /** Rough rules for words missing from the lexicon. */
+  function heuristicEntry(stem: string): Entry {
     let m = stem;
     let weak = false;
     let pl;
@@ -216,11 +219,11 @@
     'Teach', 'Drive', 'Zoom', 'Dial', 'Fade', 'Join', 'Logg', 'Weig', 'Stay', 'Put', 'Cash', 'Plugg', 'Bundes']);
 
   /**
-   * Führt den Stamm vor dem Genderzeichen auf einen Lexikoneintrag zurück.
+   * Finds the lexicon entry for the stem before a gender mark.
    * stem: "Lehrer", "Ärzt", "Kolleg", "Kollege", "Arzt", "Nicht-Expert" …
-   * strict: nur Lexikontreffer oder typische Personenendungen (für Binnen-I ohne Sonderzeichen)
+   * strict: only lexicon hits or typical person suffixes (for forms without a mark, like LehrerInnen)
    */
-  function resolveStem(stem, strict) {
+  function resolveStem(stem: string, strict: boolean) {
     const cands = [stem + 'in'];
     if (stem.endsWith('e')) cands.push(stem.slice(0, -1) + 'in');
     const u = umlautLast(stem);
@@ -234,11 +237,11 @@
     return heuristicEntry(stem);
   }
 
-  function allForms(e) {
+  function allForms(e: Entry) {
     return [e.masc, e.gen, e.dat, e.akk, e.pl, e.datPl];
   }
 
-  // ---------------------------------------------------------------- Kontext (Kasus/Numerus)
+  // ---------------------------------------------------------------- Context (case and number)
 
   const DAT_PREP = new Set('aus außer bei beim mit mitsamt nach seit von vom zu zum zur gegenüber samt entgegen laut unter zwischen neben vor hinter nebst dank'.split(' '));
   const AKK_PREP = new Set('für gegen ohne durch um wider'.split(' '));
@@ -252,7 +255,7 @@
   const RE_EN = new RegExp('^(?:den|' + DER_STEM + 'en|' + EIN_STEM + 'en|allen)$');
   const RE_GEN = new RegExp('^(?:des|' + DER_STEM + 'es|' + EIN_STEM + 'es)$');
   const RE_FEM_E = new RegExp('^(' + EIN_STEM + ')e$');           // eine, keine, meine
-  const RE_FEM_ER = new RegExp('^(' + EIN_STEM + ')er$');         // einer, keiner (fem. Dat/Gen)
+  const RE_FEM_ER = new RegExp('^(' + EIN_STEM + ')er$');         // einer, keiner (feminine dative/genitive)
   const RE_DER_E = new RegExp('^(' + DER_STEM + ')e$');           // jede, diese
   const RE_DER_ER = new RegExp('^' + DER_STEM + 'er$');           // jeder, dieser
   const RE_EIN = new RegExp('^' + EIN_STEM + '$');
@@ -260,16 +263,15 @@
   const RE_EINE_R = new RegExp('^(?:[KkMmDdSs]?[Ee]in|[Ii]hr|[Uu]nser|[Ee]ur|[Kk]ein)e(?:' + MARK + '-?|\\()r\\)?$', 'u');
   const RE_PLURAL_DET =/^(?:die|alle|viele|einige|wenige|beide|mehrere|keine|meine|deine|seine|ihre|unsere|eure|diese|jene|welche|solche|manche)$/;
 
-  /** Die letzten Wörter vor einer Position, mit Startindex im Text. Stoppt an Satzzeichen. */
-  function wordsBefore(before, max) {
+  /** The last words before a position, with their start index, last word first. Stops at punctuation. */
+  function wordsBefore(before: string, max: number) {
     const from = Math.max(0, before.length - 120);
     const tail = before.slice(from);
     const re = /\S+/g;
-    const words = [];
+    const words: Word[] = [];
     let m;
     while ((m = re.exec(tail))) words.push({ w: m[0], start: from + m.index });
-    // letzte Wörter, rückwärts; an Satz-/Teilsatzgrenzen abbrechen
-    const res = [];
+    const res: Word[] = [];
     for (let i = words.length - 1; i >= 0 && res.length < max; i--) {
       const raw = words[i].w;
       if (/[.!?;:,–—"“”„»«\]]$/.test(raw) && !/^(?:bzw|z\.B|u\.a|ca|Dr|Prof)\.$/.test(raw)) break;
@@ -279,35 +281,34 @@
       res.push({ w, start: words[i].start + (lead ? lead[0].length : 0), end: words[i].start + raw.length });
       if (lead) break;
     }
-    // Wenn der Text direkt vor dem Treffer kein Leerzeichen hat (z. B. "("), gibt es keinen Kontext
+    // No context if the match isn't preceded by whitespace (e.g. "(")
     if (before && !/\s$/.test(before)) return [];
     return res;
   }
 
-  function isMarked(w) {
+  function isMarked(w: string) {
     return /[*:_/·•|⁎∗＊()]/.test(w) || /\p{Ll}[RNMSE]$/u.test(w);
   }
 
   /**
-   * Bestimmt Kasus und Numerus-Kontext eines Substantivs anhand der Wörter davor.
-   * Liefert { kasus, fem } – fem beschreibt einen rein weiblichen Artikel, der
-   * umgeschrieben werden muss: { word, index, type }.
+   * Determines a noun's case from the words before it. edits rewrite a purely
+   * feminine article (and adjectives) before it to the masculine form.
    */
-  function analyseContext(before, plural) {
+  function analyseContext(before: string, plural: boolean): Context {
     const words = wordsBefore(before, 6);
-    const adjectives = [];
+    const adjectives: Word[] = [];
     let sawQuant = false;
     for (let i = 0; i < words.length; i++) {
       const raw = words[i].w;
       const w = raw.toLowerCase();
       if (/^\d[\d.,]*$/.test(w)) continue;
       if (!plural && RE_EINE_R.test(raw)) {
-        // "mit eine*r Ärzt*in": vor einem Substantiv ist das der Dativ (einer/einem)
+        // "mit eine*r Ärzt*in": before a noun this is the dative (einer/einem)
         const stem = raw.slice(0, raw.search(/e(?:[^\p{L}]+)r\)?$/u));
         return { kasus: 'dat', edits: [{ start: words[i].start, end: words[i].start + raw.length, text: stem + 'em' }] };
       }
       if (isMarked(raw)) {
-        // gegenderter Artikel (der*die, eine*n): die männliche Lesart bestimmt den Kasus
+        // Gendered article (der*die, eine*n): its masculine reading gives the case
         const n = normalizeArticles(raw, { binnenI: 0 }).toLowerCase();
         if (isDet(n)) return { kasus: caseOfMasc(n, plural) };
       }
@@ -331,13 +332,13 @@
     return { kasus: plural && sawQuant ? 'dat' : 'nom' };
   }
 
-  function isDet(w) {
+  function isDet(w: string) {
     return /^(?:der|die|das|den|dem|des)$/.test(w) || RE_DAT.test(w) || RE_EN.test(w) || RE_GEN.test(w) ||
       RE_FEM_E.test(w) || RE_FEM_ER.test(w) || RE_DER_E.test(w) || RE_DER_ER.test(w) || RE_EIN.test(w) || RE_PLURAL_DET.test(w);
   }
 
-  /** Erster Artikel vor einer Position (Adjektive und Zahlen werden übersprungen), sonst ''. */
-  function firstDet(before) {
+  /** The first article before a position, skipping adjectives and numbers, or ''. */
+  function firstDet(before: string) {
     for (const { w: raw } of wordsBefore(before, 4)) {
       const w = raw.toLowerCase();
       if (isDet(w)) return w;
@@ -347,7 +348,7 @@
     return '';
   }
 
-  function caseOfMasc(n, plural) {
+  function caseOfMasc(n: string, plural: boolean): Kasus {
     if (plural) return /^(?:den|\p{L}+en)$/u.test(n) && n !== 'ein' ? 'dat' : 'nom';
     if (/em$/.test(n)) return 'dat';
     if (/es$/.test(n)) return 'gen';
@@ -355,18 +356,18 @@
     return 'nom';
   }
 
-  /** Rein weiblicher Artikel vor einem Singular ("die Lehrer*in") – Kasus raten und Artikel umschreiben. */
-  function femContext(words, i, adjectives, type) {
+  /** Purely feminine article before a singular ("die Lehrer*in"): guesses the case and rewrites the article. */
+  function femContext(words: Word[], i: number, adjectives: Word[], type: 'der' | 'die' | 'eine' | 'einer' | 'jede'): Context {
     const det = words[i];
     const prev = words[i + 1] ? words[i + 1].w : '';
     const prevLower = prev.toLowerCase();
-    let kasus;
+    let kasus: Kasus;
     if (type === 'die' || type === 'eine' || type === 'jede') {
       kasus = AKK_PREP.has(prevLower) ? 'akk' : 'nom';
     } else if (type === 'einer') {
-      // Genitiv steht fast immer hinter einem Substantiv ("die Aufgabe einer Lehrer*in")
+      // The genitive almost always follows a noun ("die Aufgabe einer Lehrer*in")
       kasus = !DAT_PREP.has(prevLower) && /^\p{Lu}/u.test(prev) ? 'gen' : 'dat';
-    } else { // "der" – männlicher Nominativ oder weiblicher Dativ/Genitiv
+    } else { // "der": masculine nominative or feminine dative/genitive
       if (DAT_PREP.has(prevLower)) kasus = 'dat';
       else if (/^\p{Lu}/u.test(prev) && /^\p{Ll}/u.test(det.w)) kasus = 'gen';
       else return { kasus: 'nom' };
@@ -381,7 +382,7 @@
     const edits = [{ start: det.start, end: det.start + det.w.length, text: matchCase(masc, det.w) }];
     for (const a of adjectives) {
       if (!/^\p{Ll}+e$/u.test(a.w)) continue;
-      let ending = null;
+      let ending: string | null = null;
       if (kasus === 'akk' || kasus === 'dat' || kasus === 'gen') ending = 'en';
       else if (type === 'eine') ending = 'er';
       if (ending) edits.push({ start: a.start, end: a.start + a.w.length, text: a.w.slice(0, -1) + ending });
@@ -389,7 +390,7 @@
     return { kasus, edits };
   }
 
-  function applyEdits(text, edits) {
+  function applyEdits(text: string, edits: TextEdit[] | undefined) {
     if (!edits) return text;
     for (const e of edits.slice().sort((a, b) => b.start - a.start)) {
       text = text.slice(0, e.start) + e.text + text.slice(e.end);
@@ -397,16 +398,16 @@
     return text;
   }
 
-  function formFor(entry, plural, kasus) {
+  function formFor(entry: Entry, plural: boolean, kasus: Kasus) {
     if (plural) return kasus === 'dat' ? entry.datPl : entry.pl;
     return entry[kasus === 'nom' ? 'masc' : kasus] || entry.masc;
   }
 
-  // ---------------------------------------------------------------- 2. Gegenderte Substantive
+  // ---------------------------------------------------------------- 2. Gendered nouns
 
   const NOUN_RE = new RegExp(
     '(?<![\\p{L}\\p{N}@/\\\\._:-])' +
-    '(\\p{Lu}[\\p{L}' + SHY + '-]*?\\p{L})' +                        // 1 Stamm
+    '(\\p{Lu}[\\p{L}' + SHY + '-]*?\\p{L})' +                        // 1 stem
     '(?:' +
       '(' + MARK + '-?|\\.)(innen|in|Innen|In|INNEN|IN)' +           // 2,3 Lehrer*innen, Lehrer.in
       '|\\((innen|in|Innen|In|INNEN|IN)\\)' +                         // 4   Lehrer(innen)
@@ -415,11 +416,11 @@
       '|(ïnnen|ïn|ÏNNEN|ÏN)' +                                         // 8   Lehrerïnnen
       '|\\*(nnen)' +                                                   // 9   Lehrer*nnen
     ')' +
-    '(\\p{Ll}*)' +                                                     // 10  Kompositum-Rest
+    '(\\p{Ll}*)' +                                                     // 10  rest of a compound
     WE,
     'gu');
 
-  function transformNouns(text, counts, ctx) {
+  function transformNouns(text: string, counts: GzDCounts, ctx: GzDCompiledOptions) {
     return scan(text, NOUN_RE, (m, before) => {
       const rawStem = m[1];
       const stem = rawStem.replace(SHY_RE, '');
@@ -433,9 +434,9 @@
       if (ctx.isException(m[0])) return null;
 
       const allCaps = !/\p{Ll}/u.test(stem);
-      // Ohne eindeutiges Genderzeichen (LehrerInnen, Lehrer.innen, Komposita) nur bei Lexikontreffer
-      // oder typischer Personenendung ersetzen – sonst drohen Fehltreffer wie "LinkedIn" oder "Österreich.in".
-      // "_", "/", "|" und "." kommen auch in Bezeichnern, Pfaden und Adressen vor.
+      // Without an unambiguous mark (LehrerInnen, Lehrer.innen, compounds), only replace lexicon hits
+      // or typical person suffixes, to avoid false hits like "LinkedIn" or "Österreich.in".
+      // "_", "/", "|" and "." also appear in identifiers, paths and addresses.
       const strict = binnenI || !!tail || (!!m[2] && /^[._/|]/.test(m[2]));
       const entry = resolveStem(allCaps ? capitalize(stem.toLowerCase()) : stem, strict);
       if (!entry) return null;
@@ -454,10 +455,10 @@
     });
   }
 
-  // ---------------------------------------------------------------- 3. Artikel und Pronomen
+  // ---------------------------------------------------------------- 3. Articles and pronouns
 
-  const PAIR_MAP = new Map();
-  function pair(fem, masc) {
+  const PAIR_MAP = new Map<string, string>();
+  function pair(fem: string, masc: string) {
     PAIR_MAP.set(fem + '|' + masc, masc);
     PAIR_MAP.set(masc + '|' + fem, masc);
   }
@@ -476,8 +477,8 @@
 
   const PAIR_RE = new RegExp(WB + '(\\p{L}+)(' + MARK + '-?|\\s?/\\s?| oder | bzw\\.? )(\\p{L}+)' + WE, 'gu');
 
-  // Endungen: jede*r, eine*n, jedem*r, einer*s, ein*e, jede(r), jedeR …
-  const SUFFIX_RULES = [
+  // Endings: jede*r, eine*n, jedem*r, einer*s, ein*e, jede(r), jedeR …
+  const SUFFIX_RULES: [RegExp, string | ((m: string, a: string, b: string) => string)][] = [
     [new RegExp(WB + '((?:[KkMmDdSs]?[Ee]in|[Ii]hr|[Uu]nser|[Ee]ue?r))(?:' + MARK + '-?e|\\(e\\)|E)' + WE, 'gu'), '$1'], // ein*e -> ein
     [new RegExp(WB + '(\\p{L}+e)m(?:' + MARK + '-?|\\()r\\)?' + WE, 'gu'), '$1m'],                     // jedem*r -> jedem
     [new RegExp(WB + '(\\p{L}+e)r(?:' + MARK + '-?|\\()m\\)?' + WE, 'gu'), '$1m'],                     // jeder*m -> jedem
@@ -485,11 +486,11 @@
     [new RegExp(WB + '(\\p{L}+e)r(?:' + MARK + '-?|\\()s\\)?' + WE, 'gu'), '$1s'],                     // einer*s -> eines
     [new RegExp(WB + '(\\p{L}+e)(?:' + MARK + '-?|\\()(r|m|s)\\)?' + WE, 'gu'), '$1$2'],              // jede*r -> jeder
     [new RegExp(WB + '(\\p{L}+e)(?:[*:_·•|⁎∗＊]-?)n' + WE, 'gu'), '$1n'],                              // eine*n -> einen
-    [new RegExp(WB + '(\\p{Ll}+e)(?:/-?|\\()n\\)?' + WE, 'gu'), '$1n'],                                // eine/n -> einen (nur klein: nicht "Seite(n)")
+    [new RegExp(WB + '(\\p{Ll}+e)(?:/-?|\\()n\\)?' + WE, 'gu'), '$1n'],                                // eine/n -> einen (lowercase only, not "Seite(n)")
     [new RegExp(WB + '(\\p{Ll}+e)([RNMS])' + WE, 'gu'), (m, a, b) => a + b.toLowerCase()],             // jedeR -> jeder
   ];
 
-  function normalizeArticles(text, counts) {
+  function normalizeArticles(text: string, counts: Pick<GzDCounts, 'binnenI'>) {
     text = scan(text, PAIR_RE, m => {
       const masc = PAIR_MAP.get(m[1].toLowerCase() + '|' + m[3].toLowerCase());
       if (!masc) return null;
@@ -497,25 +498,25 @@
       return { text: matchCase(masc, m[1]) };
     });
     for (const [re, rep] of SUFFIX_RULES) {
-      text = text.replace(re, function () {
+      text = text.replace(re, (...args: string[]) => {
         counts.binnenI++;
-        return typeof rep === 'function' ? rep.apply(null, arguments) : rep.replace(/\$(\d)/g, (_, n) => arguments[n]);
+        return typeof rep === 'function' ? rep(args[0], args[1], args[2]) : rep.replace(/\$(\d)/g, (_, n: string) => args[Number(n)]);
       });
     }
     return text;
   }
 
-  // ---------------------------------------------------------------- 4. Doppelformen
+  // ---------------------------------------------------------------- 4. Paired forms
 
   const PREP_W = alt('von vom für mit bei beim zu zum zur aus an am auf als nach über unter gegen ohne durch um zwischen neben vor hinter seit wegen trotz gegenüber'.split(' '));
   const DET_W = alt(['der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer', 'einem', 'einen', 'eines',
     'kein', 'keine', 'keiner', 'keinem', 'keinen', 'keines', 'ihre', 'ihren', 'ihrer', 'ihrem', 'ihr',
     'unsere', 'unseren', 'unserer', 'unserem', 'unser', 'eure', 'euren', 'jede', 'jeder', 'jedem', 'jeden', 'jedes',
     'alle', 'allen', 'aller', 'diese', 'dieser', 'diesem', 'diesen', 'dieses', 'viele', 'vielen', 'einige', 'einigen', 'beide', 'beiden']);
-  // Adjektiv vor dem ersten Wort darf groß geschrieben sein (Satzanfang: "Liebe Kolleginnen"),
-  // vor dem zweiten nicht – sonst würde ein Substantiv als Adjektiv verschluckt.
-  const ADJ_W = (first) => '(?!(?:' + Array.from(ADJ_STOP).join('|') + ')\\s)' + (first ? '\\p{L}' : '\\p{Ll}') + '\\p{Ll}*(?:e|en|er|es|em)';
-  const PREFIX = (n) => '(' + PREP_W + '\\s+)?(' + DET_W + '\\s+)?(' + ADJ_W(n === 1) + '\\s+)?';
+  // An adjective before the first word may be capitalized (sentence start: "Liebe Kolleginnen"),
+  // before the second not, or a noun would be taken for an adjective.
+  const ADJ_W = (first: boolean) => '(?!(?:' + Array.from(ADJ_STOP).join('|') + ')\\s)' + (first ? '\\p{L}' : '\\p{Ll}') + '\\p{Ll}*(?:e|en|er|es|em)';
+  const PREFIX = (n: number) => '(' + PREP_W + '\\s+)?(' + DET_W + '\\s+)?(' + ADJ_W(n === 1) + '\\s+)?';
   const DOPPEL_RE = new RegExp(
     WB + PREFIX(1) + '(\\p{Lu}[\\p{L}-]*)' +
     '( und | oder | bzw\\.? | & |, | sowie | als auch | wie auch |\\s?/\\s?)' +
@@ -524,8 +525,8 @@
   const GENDER_ADJ = /(?:^|\s)(?:männlich|weiblich|divers|nichtbinär|nicht-binär|transgeschlechtlich|trans)\p{Ll}*\s/iu;
   const DOPPEL_HINT =/\p{Ll}in(?:nen)?(?![\p{L}\p{N}])|(\p{Lu}\p{L}+) (?:und|oder|bzw\.?) \1(?![\p{L}])/u;
 
-  /** Liefert den Lexikoneintrag zu einer weiblichen Vollform (Lehrerin, Lehrerinnen) oder null. */
-  function femWord(word) {
+  /** The lexicon entry for a full feminine form (Lehrerin, Lehrerinnen), or null. */
+  function femWord(word: string) {
     let stem;
     if (word.endsWith('innen')) stem = word.slice(0, -5);
     else if (word.endsWith('in')) stem = word.slice(0, -2);
@@ -534,7 +535,7 @@
     return lookupFem(stem + 'in') || (stem.length >= 3 ? heuristicEntry(stem) : null);
   }
 
-  function matchForm(entry, word) {
+  function matchForm(entry: Entry, word: string) {
     if (word.startsWith('-')) {
       const tail = word.slice(1).toLowerCase();
       return allForms(entry).find(f => f.length > tail.length + 1 && f.toLowerCase().endsWith(tail)) || null;
@@ -542,30 +543,30 @@
     return allForms(entry).includes(word) ? word : null;
   }
 
-  function transformDoppelformen(text, counts, ctx) {
+  function transformDoppelformen(text: string, counts: GzDCounts, ctx: GzDCompiledOptions) {
     if (!DOPPEL_HINT.test(text)) return text;
     return scan(text, DOPPEL_RE, (m, before) => {
       const [all, prep1 = '', det1 = '', adj1 = '', w1, conj, prep2 = '', det2 = '', adj2 = '', w2] = m;
       if (ctx.isException(all)) return null;
-      // "Wählerinnen und männliche Wähler" unterscheidet bewusst – nicht anfassen
+      // "Wählerinnen und männliche Wähler" distinguishes on purpose; keep it
       if (GENDER_ADJ.test(adj1 + adj2)) return null;
-      // "sowohl … als auch …": das "sowohl" davor fällt mit weg; "als auch" ohne "sowohl" ist kein Paar
-      let newBefore;
+      // "sowohl … als auch …": the "sowohl" is removed too; "als auch" without "sowohl" is no pair
+      let newBefore: string | undefined;
       if (conj === ' als auch ' || conj === ' wie auch ') {
         const sowohl = /(^|\s)[Ss]owohl $/.exec(before);
         if (!sowohl) return null;
         newBefore = before.slice(0, sowohl.index + sowohl[1].length);
       }
-      const done = (text) => {
+      const done = (text: string) => {
         counts.doppelformen++;
-        if (newBefore != null && before[newBefore.length] === 'S') text = capitalize(text); // "Sowohl …" am Satzanfang
+        if (newBefore != null && before[newBefore.length] === 'S') text = capitalize(text); // "Sowohl …" at sentence start
         return { text, before: newBefore };
       };
-      // Rest wie "Wähler und Wähler" (aus "Wähler*innen und Wähler") zusammenziehen
+      // Merges leftovers like "Wähler und Wähler" (from "Wähler*innen und Wähler")
       if (w1 === w2 && !prep2 && !det2 && !adj2 && /und|oder|bzw|&|\//.test(conj)) {
         return done(prep1 + det1 + adj1 + w1);
       }
-      // weiblich zuerst: "die Lehrerin und der Lehrer", "Bürgervertreterinnen und -vertreter"
+      // Feminine first: "die Lehrerin und der Lehrer", "Bürgervertreterinnen und -vertreter"
       let fem = femWord(w1);
       if (fem) {
         const masc = matchForm(fem, w2);
@@ -575,7 +576,7 @@
           return done(out);
         }
       }
-      // männlich zuerst: "Lehrer und Lehrerinnen", "Bürgervertreter und -vertreterinnen"
+      // Masculine first: "Lehrer und Lehrerinnen", "Bürgervertreter und -vertreterinnen"
       const femTail = w2.startsWith('-') ? capitalize(w2.slice(1)) : w2;
       fem = femWord(femTail);
       if (fem) {
@@ -588,9 +589,9 @@
     });
   }
 
-  // ---------------------------------------------------------------- 5. Partizipien
+  // ---------------------------------------------------------------- 5. Participles
 
-  const PARTIZIP_TABLE = {
+  const PARTIZIP_TABLE: Record<string, string> = {
     Studier: 'Student', Dozier: 'Dozent', Assistier: 'Assistent', Promovier: 'Doktorand',
     Kunstschaff: 'Künstler', Musikschaff: 'Musiker', Zufußgeh: 'Fußgänger', Fußgeh: 'Fußgänger',
     Lern: 'Lerner', Geflüchtet: 'Flüchtling',
@@ -602,7 +603,7 @@
     WB + '(\\p{Lu}[\\p{L}-]*?)(end|et)(e|en|er|em|es)(?:(' + MARK + '-?|\\()(r|n|m|s)\\)?)?' + WE + '(?!\\s+\\p{Lu})',
     'gu');
 
-  function participleEntry(stem, kind) {
+  function participleEntry(stem: string, kind: string) {
     if (PARTIZIP_KEEP.has(stem)) return null;
     if (kind === 'et') {
       const t = PARTIZIP_TABLE[stem + 'et'];
@@ -618,35 +619,35 @@
   const GEN_PL_QUANT = new Set('aller beider vieler einiger weniger mehrerer zahlreicher etlicher sämtlicher verschiedener anderer weiterer'.split(' '));
 
   /**
-   * "-er" ohne Artikel: Nominativ Singular ("als Studierender") oder Genitiv Plural
-   * ("Anteil ausländischer Studierender", "die Zahl vieler Studierender").
+   * Whether "-er" without an article is genitive plural ("Anteil ausländischer Studierender",
+   * "die Zahl vieler Studierender") rather than nominative singular ("als Studierender").
    */
-  function isGenPluralEr(before) {
+  function isGenPluralEr(before: string) {
     for (const { w: raw } of wordsBefore(before, 6)) {
       const w = raw.toLowerCase();
       if (/^\d[\d.,]*$/.test(w)) continue;
       if (GEN_PL_QUANT.has(w)) return true;
       if (RE_ADJ.test(raw) && !ADJ_STOP.has(w) && /^\p{Ll}/u.test(raw)) continue;
-      // direkt nach einem Substantiv ("Anteil", "Zahl") steht der Genitiv;
-      // großgeschriebene Adjektive/Artikel am Satzanfang ("Ausländischer Studierender sucht") zählen nicht
+      // Directly after a noun ("Anteil", "Zahl") it is genitive; capitalized adjectives or
+      // articles at sentence start ("Ausländischer Studierender sucht") don't count
       return /^\p{Lu}\p{Ll}/u.test(raw) && !RE_ADJ.test(w) && !isDet(w) &&
         !DAT_PREP.has(w) && !AKK_PREP.has(w) && !OTHER_PREP.has(w);
     }
     return false;
   }
 
-  function transformPartizip(text, counts, ctx) {
+  function transformPartizip(text: string, counts: GzDCounts, ctx: GzDCompiledOptions) {
     return scan(text, PARTIZIP_RE, (m, before) => {
       const [all, stem, kind, end, , star] = m;
       if (ctx.isException(all)) return null;
       const entry = participleEntry(stem, kind);
       if (!entry) return null;
-      let plural;
-      let kasus;
-      let edits;
+      let plural: boolean;
+      let kasus: Kasus;
+      let edits: TextEdit[] | undefined;
       if (star) {
         plural = false;
-        kasus = { r: 'nom', n: 'akk', m: 'dat', s: 'gen' }[star];
+        kasus = ({ r: 'nom', n: 'akk', m: 'dat', s: 'gen' } as const)[star as 'r' | 'n' | 'm' | 's'];
       } else if (end === 'er') {
         if (!RE_EIN.test(firstDet(before)) && isGenPluralEr(before)) { plural = true; kasus = 'gen'; }
         else { plural = false; kasus = 'nom'; }
@@ -655,11 +656,11 @@
       else if (end === 'es') { plural = false; kasus = 'gen'; }
       else {
         const det = firstDet(before);
-        if (det === 'das') return null; // "das Vorstehende" – keine Person
+        if (det === 'das') return null; // "das Vorstehende" is not a person
         if (end === 'e') {
           if (det === 'der' || RE_DER_ER.test(det)) { plural = false; kasus = 'nom'; }
           else if (det === 'die' || det === 'eine' || RE_DER_E.test(det)) {
-            // "die Studierende" = eine Studentin -> "der Student"
+            // "die Studierende" (one female student) -> "der Student"
             plural = false;
             const c = analyseContext(before, false);
             kasus = c.kasus;
@@ -684,20 +685,20 @@
   const FRAU_RE = new RegExp('(?<![\\p{L}\\p{N}./@_-])frau(?![\\p{L}\\p{N}@_/-])', 'gu');
   const JEMENSCH_RE = new RegExp(WB + '([Jj]e|[Nn]ie)mensch' + WE, 'gu');
 
-  function transformMan(text, counts) {
+  function transformMan(text: string, counts: GzDCounts) {
     if (!/frau|mensch/.test(text)) return text;
     text = text.replace(MAN_RE, () => { counts.binnenI++; return 'man'; });
     text = text.replace(FRAU_RE, () => { counts.binnenI++; return 'man'; });
-    text = text.replace(JEMENSCH_RE, (m, p) => { counts.binnenI++; return p + 'mand'; });
+    text = text.replace(JEMENSCH_RE, (m, p: string) => { counts.binnenI++; return p + 'mand'; });
     return text;
   }
 
-  // ---------------------------------------------------------------- Weiche Trennstriche
+  // ---------------------------------------------------------------- Soft hyphens
 
   const SHY_WORD_RE = new RegExp('[\\p{L}' + SHY + '*:_/·•|().-]*[' + SHY + '][\\p{L}' + SHY + '*:_/·•|().-]*', 'gu');
   const GENDERISH = new RegExp('\\p{Ll}(?:' + MARK + '-?|\\(|\\.)?(?:[Ii]nn?|ïn)|\\p{Ll}in(?:nen)?$', 'u');
 
-  function stripSoftHyphens(text) {
+  function stripSoftHyphens(text: string) {
     if (!SHY_RE.test(text)) return text;
     SHY_RE.lastIndex = 0;
     return text.replace(SHY_WORD_RE, w => {
@@ -706,42 +707,38 @@
     });
   }
 
-  // ---------------------------------------------------------------- Öffentliche API
+  // ---------------------------------------------------------------- Public API
 
   const QUICK = new RegExp('[*:_/·•|⁎∗＊()ïÏ]|\\p{Ll}I|\\p{Ll}\\.?in(?:nen)?' + WE + '|ende|frau|mensch| oder | bzw', 'u');
 
-  /** Zerlegt Benutzerlisten aus den Optionen. "Von => Nach" bzw. "Von = Nach", ein Eintrag pro Zeile. */
-  function parseCustom(str) {
+  /** Parses custom replacements: one "from => to" or "from = to" per line. */
+  function parseCustom(str: unknown) {
     return String(str || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
       .map(l => l.split(/\s*=>?\s*/)).filter(p => p.length === 2 && p[0]);
   }
 
-  function parseList(str) {
+  function parseList(str: unknown) {
     return String(str || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
   }
 
-  function compileOptions(opts) {
-    if (opts && opts._compiled) return opts._compiled;
+  function compileOptions(opts?: GzDOptions | null): GzDCompiledOptions {
+    const cached = opts && (opts as { _compiled?: GzDCompiledOptions })._compiled;
+    if (cached) return cached;
     const o = Object.assign({ doppelformen: true, partizip: false, eigene: '', ausnahmen: '' }, opts);
     const exceptions = parseList(o.ausnahmen);
     const exRe = exceptions.length ? new RegExp(exceptions.map(escapeRe).join('|'), 'u') : null;
-    const custom = parseCustom(o.eigene).map(([from, to]) => [new RegExp(WB + escapeRe(from) + WE, 'gu'), to]);
+    const custom = parseCustom(o.eigene).map(([from, to]): [RegExp, string] => [new RegExp(WB + escapeRe(from) + WE, 'gu'), to]);
     const compiled = {
       doppelformen: !!o.doppelformen,
       partizip: !!o.partizip,
       custom,
-      isException: s => !!exRe && exRe.test(s),
+      isException: (s: string) => !!exRe && exRe.test(s),
     };
     if (opts) Object.defineProperty(opts, '_compiled', { value: compiled, enumerable: false, configurable: true });
     return compiled;
   }
 
-  /**
-   * Hauptfunktion.
-   * opts: { doppelformen, partizip, eigene, ausnahmen }
-   * Rückgabe: { text, counts: { binnenI, doppelformen, partizip } }
-   */
-  function transform(text, opts) {
+  function transform(text: string, opts?: GzDOptions | null): GzDResult {
     const counts = { binnenI: 0, doppelformen: 0, partizip: 0 };
     const ctx = compileOptions(opts);
     let s = text;
@@ -764,5 +761,4 @@
 
   const api = { transform, loadLexicon, lexiconSize, parseList, parseCustom, compileOptions };
   root.GenderCore = api;
-  if (typeof module !== 'undefined' && module.exports) module.exports = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this);
+})(globalThis);

@@ -3,7 +3,7 @@
   if (window.__dazzler || window.top !== window) return;
 
   // Deezer's player controls (window.playerProxy.control) per media action.
-  const MEDIA_CONTROLS = {
+  const MEDIA_CONTROLS: Record<MediaAction, keyof DeezerPlayerControl> = {
     playpause: "togglePause",
     play: "play",
     pause: "pause",
@@ -12,7 +12,7 @@
   };
 
   // Player bar buttons, used when the player API isn't available.
-  const MEDIA_BUTTONS = {
+  const MEDIA_BUTTONS: Record<MediaAction, string[]> = {
     playpause: ['[data-testid="play_button_pause"]', '[data-testid="play_button_play"]'],
     play: ['[data-testid="play_button_play"]'],
     pause: ['[data-testid="play_button_pause"]'],
@@ -48,7 +48,7 @@
 
   // --- Helpers ---
 
-  function onReady(callback) {
+  function onReady(callback: () => void) {
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", callback);
     } else {
@@ -56,7 +56,7 @@
     }
   }
 
-  function addStyle(css) {
+  function addStyle(css: string) {
     const style = document.createElement("style");
     style.textContent = css;
     onReady(() => document.head.append(style));
@@ -67,7 +67,7 @@
   // Captures the Media Session handlers Deezer registers, as a fallback for
   // when its player API isn't available.
   function captureMediaSessionHandlers() {
-    const handlers = {};
+    const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler | null>> = {};
     const ms = navigator.mediaSession;
     if (ms?.setActionHandler) {
       const original = ms.setActionHandler.bind(ms);
@@ -79,7 +79,7 @@
     return handlers;
   }
 
-  function runMediaAction(action) {
+  function runMediaAction(action: MediaAction) {
     const control = window.playerProxy?.control;
     const method = control?.[MEDIA_CONTROLS[action]];
     if (method) {
@@ -93,7 +93,7 @@
       return;
     }
     const button = MEDIA_BUTTONS[action]
-      .map((selector) => document.querySelector(selector))
+      .map((selector) => document.querySelector<HTMLElement>(selector))
       .find(Boolean);
     button?.click();
   }
@@ -105,11 +105,11 @@
   // background, so returning to e.g. the home page is instant.
   function cachePageContent() {
     const MAX_AGE_MS = 15 * 60 * 1000;
-    const cache = new Map();
+    const cache = new Map<string, { body: string; time: number }>();
     const originalFetch = window.fetch;
 
     // Per-request (cid) and per-session (api_token) parameters don't change the content.
-    function cacheKey(url) {
+    function cacheKey(url: RequestInfo | URL) {
       if (typeof url !== "string" || !url.includes("method=page.get")) return null;
       const u = new URL(url, location.href);
       u.searchParams.delete("cid");
@@ -117,7 +117,7 @@
       return u.toString();
     }
 
-    function hasError(body) {
+    function hasError(body: string) {
       try {
         const error = JSON.parse(body).error;
         return error && Object.keys(error).length > 0;
@@ -126,7 +126,7 @@
       }
     }
 
-    function fetchAndCache(key, args) {
+    function fetchAndCache(key: string, args: Parameters<typeof fetch>) {
       const response = originalFetch.apply(window, args);
       response
         .then((res) => (res.ok ? res.clone().text() : null))
@@ -137,13 +137,14 @@
       return response;
     }
 
-    window.fetch = function (input, init) {
+    window.fetch = function (this: Window, ...args) {
+      const [input, init] = args;
       const key = cacheKey(input);
       if (!key || (init?.method && init.method !== "GET")) {
-        return originalFetch.apply(this, arguments);
+        return originalFetch.apply(this, args);
       }
       const cached = cache.get(key);
-      const refresh = fetchAndCache(key, arguments);
+      const refresh = fetchAndCache(key, args);
       if (!cached || Date.now() - cached.time > MAX_AGE_MS) return refresh;
       refresh.catch(() => {});
       return Promise.resolve(
@@ -161,17 +162,28 @@
   function filterHomePlaylists() {
     const WORDS = /pride|queer|diversity|empower/i;
     const originalFetch = window.fetch;
-    let userId = null;
+    let userId: string | null = null;
 
-    function isHidden(item) {
+    // Items and sections of a page.get result, as far as they are used here.
+    type PageItem = {
+      type?: string;
+      title?: string;
+      description?: string;
+      data?: { PARENT_USER_ID?: unknown; TITLE?: string; DESCRIPTION?: string };
+    };
+    type PageSection = { section_id?: string; items?: PageItem[] };
+    type Page = { page_name?: string; sections?: PageSection[] };
+
+    function isHidden(item: PageItem) {
       const data = item.data ?? {};
       if (item.type !== "playlist" || String(data.PARENT_USER_ID) === userId) return false;
       return WORDS.test(`${data.TITLE ?? item.title ?? ""} ${data.DESCRIPTION ?? item.description ?? ""}`);
     }
 
     // page: a page.get result, e.g. { page_name: "home", sections: [{ items: [...] }] }.
-    function filterPage(page) {
-      if (page?.page_name !== "home" || !Array.isArray(page.sections)) return page;
+    function filterPage(value: unknown) {
+      const page = value as Page | null | undefined;
+      if (page?.page_name !== "home" || !Array.isArray(page.sections)) return value;
       const sections = page.sections
         .map((section) =>
           Array.isArray(section.items)
@@ -184,8 +196,8 @@
 
     // Moves the "Mixes inspired by..." section (found by its content source,
     // as its title is localized) below the user's own playlists.
-    function moveMixesBelowPlaylists(sections) {
-      const source = (section) => section.section_id ?? "";
+    function moveMixesBelowPlaylists(sections: PageSection[]) {
+      const source = (section: PageSection) => section.section_id ?? "";
       const mixes = sections.find((s) => source(s).includes("track_content-source_user-tops"));
       const playlists = sections.find((s) => source(s).includes("playlists_content-source_user-favorites"));
       if (!mixes || !playlists || sections.indexOf(mixes) > sections.indexOf(playlists)) return sections;
@@ -195,12 +207,12 @@
     }
 
     // Filtered when read, so that the user's ID is known by then.
-    let appState;
-    let filtered = null;
+    let appState: unknown;
+    let filtered: { source: unknown; userId: string | null; page: unknown } | null = null;
     Object.defineProperty(window, "__DZR_APP_STATE__", {
       configurable: true,
       get() {
-        if (filtered?.source !== appState || filtered.userId !== userId) {
+        if (!filtered || filtered.source !== appState || filtered.userId !== userId) {
           filtered = { source: appState, userId, page: filterPage(appState) };
         }
         return filtered.page;
@@ -210,7 +222,7 @@
       },
     });
 
-    async function filterResponse(response) {
+    async function filterResponse(response: Response) {
       try {
         const body = await response.clone().json();
         body.results = filterPage(body.results);
@@ -224,8 +236,9 @@
       }
     }
 
-    window.fetch = function (input) {
-      const response = originalFetch.apply(this, arguments);
+    window.fetch = function (this: Window, ...args) {
+      const [input] = args;
+      const response = originalFetch.apply(this, args);
       if (typeof input !== "string" || !input.includes("/ajax/gw-light.php")) return response;
       const method = new URL(input, location.href).searchParams.get("method");
       if (method === "deezer.getUserData") {
@@ -351,16 +364,16 @@
         <div class="slider-track-active"></div>
         <input class="slider-track-input" type="range" min="0" max="100" step="1" aria-label="Volume">
       </div>`;
-    const input = slider.querySelector("input");
-    const active = slider.querySelector(".slider-track-active");
+    const input = slider.querySelector("input")!;
+    const active = slider.querySelector<HTMLElement>(".slider-track-active")!;
     let dragging = false;
 
-    function show(value) {
-      input.value = value;
+    function show(value: number) {
+      input.value = String(value);
       active.style.width = `${value}%`;
     }
 
-    function setVolume(value) {
+    function setVolume(value: number) {
       value = Math.max(0, Math.min(100, value));
       show(value);
       window.dzPlayer?.control?.setVolume(value / 100, true);
@@ -369,7 +382,7 @@
 
     // Applies the volume of the previous session once the player exists.
     let restored = false;
-    function restoreVolume(player) {
+    function restoreVolume(player: DeezerPlayer) {
       restored = true;
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved !== null && Number.isFinite(Number(saved))) {
@@ -425,12 +438,12 @@
     const SEEK_TIMEOUT_MS = 1500;
     const SEEK_TOLERANCE = 0.01;
     const TRACK = '.slider-track:has(> [data-testid="progress_bar"])';
-    let lastPosition = null;
+    let lastPosition: number | null = null;
     let lastTime = 0;
     let dragging = false;
     // While a seek is pending: its target (0-1), its distance (0-1) from the
     // position before it, and when to stop waiting for it.
-    let seek = null;
+    let seek: { target: number; distance: number; until: number } | null = null;
 
     // --dazzler-progress (0-1) and --dazzler-progress-px are set in frame.
     addStyle(`
@@ -462,14 +475,14 @@
     `);
 
     function progressInput() {
-      return document.querySelector('[data-testid="progress_bar"]');
+      return document.querySelector<HTMLInputElement>('[data-testid="progress_bar"]');
     }
 
     // The position to show (0-1) while playing, or null to show Deezer's.
-    function smoothedProgress(now) {
+    function smoothedProgress(now: number) {
       const player = window.dzPlayer;
       const duration = player?.getDuration?.();
-      if (!player?.isPlaying?.() || !(duration > 0)) return null;
+      if (!player?.isPlaying?.() || !duration || !(duration > 0)) return null;
       const position = player.getPosition();
       if (seek) {
         // Seeks can land a little off the target, so getting much closer counts too.
@@ -486,11 +499,11 @@
       return Math.min(1, (position + elapsed) / duration);
     }
 
-    function frame(now) {
+    function frame(now: number) {
       requestAnimationFrame(frame);
       const input = progressInput();
       const track = input?.parentElement;
-      if (!track) return;
+      if (!input || !track) return;
       // Lets clicks land between whole seconds; they are floored on release.
       if (input.step !== "any") input.step = "any";
       let progress = dragging ? null : smoothedProgress(now);
@@ -498,9 +511,9 @@
         lastPosition = null;
         progress = dragging
           ? Number(input.value) / Number(input.max)
-          : (parseFloat(track.querySelector(".slider-track-active")?.style.width) || 0) / 100;
+          : (parseFloat(track.querySelector<HTMLElement>(".slider-track-active")?.style.width ?? "") || 0) / 100;
       }
-      track.style.setProperty("--dazzler-progress", progress);
+      track.style.setProperty("--dazzler-progress", String(progress));
       track.style.setProperty(
         "--dazzler-progress-px",
         `${progress * track.getBoundingClientRect().width}px`,
@@ -512,7 +525,7 @@
     document.addEventListener(
       "pointerdown",
       (e) => {
-        if (e.target.closest?.('[data-testid="progress_bar"]')) dragging = true;
+        if ((e.target as Element).closest?.('[data-testid="progress_bar"]')) dragging = true;
       },
       true,
     );
@@ -523,11 +536,11 @@
           const input = progressInput();
           const player = window.dzPlayer;
           const duration = player?.getDuration?.();
-          if (dragging && input && duration > 0) {
+          if (dragging && input && player && duration && duration > 0) {
             // Deezer seeks to the input's value on mouseup, which comes after this.
             // Setting it earlier, while dragging, would make React skip Deezer's
             // change handler.
-            input.value = String(Math.floor(input.value));
+            input.value = String(Math.floor(Number(input.value)));
             const target = Number(input.value) / Number(input.max);
             const distance = Math.abs(player.getPosition() / duration - target);
             seek = { target, distance, until: performance.now() + SEEK_TIMEOUT_MS };
@@ -550,10 +563,13 @@
     const SAVE_INTERVAL_MS = 3000;
     const db = openDatabase();
     let restored = false;
-    let savedSignature = null;
+    let savedSignature: string | null = null;
+
+    type SavedQueue = { data: DeezerTrack[]; context: DeezerContext; type: string };
+    type SavedPosition = { signature: string; index: number; offset: number };
 
     function openDatabase() {
-      return new Promise((resolve, reject) => {
+      return new Promise<IDBDatabase>((resolve, reject) => {
         const req = indexedDB.open(DB_NAME, 1);
         req.onupgradeneeded = () => req.result.createObjectStore(STORE);
         req.onsuccess = () => resolve(req.result);
@@ -561,10 +577,10 @@
       });
     }
 
-    async function request(mode, run) {
+    async function request<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>) {
       const tx = (await db).transaction(STORE, mode);
       const req = run(tx.objectStore(STORE));
-      return new Promise((resolve, reject) => {
+      return new Promise<T>((resolve, reject) => {
         tx.oncomplete = () => resolve(req.result);
         tx.onerror = () => reject(tx.error);
       });
@@ -581,11 +597,11 @@
       if (!restored || !player || player.getTrackListType() === "livestream") return;
       const data = player.getTrackList();
       const signature = data.map((track) => track.UID ?? track.SNG_ID).join(",");
-      const position = { signature, index: player.getIndexSong(), offset: player.getPosition() };
+      const position: SavedPosition = { signature, index: player.getIndexSong(), offset: player.getPosition() };
       await request("readwrite", (store) => {
         // The queue can be large, so it is only rewritten when it changes.
         if (signature !== savedSignature) {
-          const queue = { data, context: player.getContext(), type: player.getTrackListType() };
+          const queue: SavedQueue = { data, context: player.getContext(), type: player.getTrackListType() };
           store.put(queue, "queue");
         }
         return store.put(position, "position");
@@ -594,10 +610,10 @@
     }
 
     // The options for player.play() that load the saved queue, or null.
-    async function savedPlayOptions() {
+    async function savedPlayOptions(): Promise<DeezerPlayOptions | null> {
       const [queue, position] = await Promise.all([
-        request("readonly", (store) => store.get("queue")),
-        request("readonly", (store) => store.get("position")),
+        request<SavedQueue | undefined>("readonly", (store) => store.get("queue")),
+        request<SavedPosition | undefined>("readonly", (store) => store.get("position")),
       ]);
       if (!queue || !position) return null;
       savedSignature = position.signature;
@@ -614,7 +630,7 @@
     }
 
     async function restore() {
-      const player = loadedPlayer();
+      const player = loadedPlayer()!;
       if (replacedDefault || player.isPlaying()) return;
       const options = await savedPlayOptions();
       if (options) await player.play(options);
@@ -628,11 +644,12 @@
     Object.defineProperty(window, "dzPlayer", {
       configurable: true,
       get: () => dzPlayer,
-      set(player) {
+      set(player: DeezerPlayer | undefined) {
         dzPlayer = player;
         const play = player?.play;
-        if (typeof play !== "function" || play.dazzlerWrapped) return;
-        player.play = async function (options) {
+        if (!player || typeof play !== "function" || play.dazzlerWrapped) return;
+        player.play = async function (this: DeezerPlayer, ...args: Parameters<DeezerPlayer["play"]>) {
+          const [options] = args;
           if (!restored && !replacedDefault && options?.context?.TYPE === "player_default_playlist") {
             const saved = await savedPlayOptions().catch(() => null);
             if (saved) {
@@ -640,7 +657,7 @@
               return play.call(this, saved);
             }
           }
-          return play.apply(this, arguments);
+          return play.apply(this, args);
         };
         player.play.dazzlerWrapped = true;
       },

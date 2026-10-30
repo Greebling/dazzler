@@ -1,0 +1,14 @@
+{
+  // Build scripts, run directly by Node, which strips the types; tsc only checks them.
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.ts", "*.mts"]
+}
