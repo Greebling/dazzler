@@ -533,7 +533,8 @@
       track.style.setProperty("--dazzler-progress", String(progress));
       track.style.setProperty(
         "--dazzler-progress-px",
-        `${progress * track.getBoundingClientRect().width}px`,
+        // offsetWidth, unlike the bounding rect, ignores the player bar's zoom.
+        `${progress * track.offsetWidth}px`,
       );
     }
 
