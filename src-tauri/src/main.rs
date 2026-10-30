@@ -3,6 +3,9 @@
 
 use std::time::Duration;
 
+#[cfg(windows)]
+mod thumbbar;
+
 use tauri::webview::PageLoadEvent;
 use tauri::window::Color;
 use tauri::{
@@ -250,6 +253,8 @@ fn main() {
                 builder = builder.initialization_script(script);
             }
             let window = builder.build()?;
+            #[cfg(windows)]
+            thumbbar::setup(app.handle(), &window);
             // Restore before showing so the window doesn't jump from the default placement.
             let _ = window.restore_state(StateFlags::all() - StateFlags::VISIBLE);
             window.show()?;
