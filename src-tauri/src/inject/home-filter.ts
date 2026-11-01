@@ -6,8 +6,13 @@
 // from page.get afterwards; both are filtered.
 function filterHomePlaylists() {
   const WORDS = /pride|queer|diversity|empower/i;
+  // The embedded sections are read before Deezer fetches the user's ID, so it is kept from the last start.
+  const USER_ID_KEY = "dazzler-user-id";
   const originalFetch = window.fetch;
   let userId: string | null = null;
+  try {
+    userId = localStorage.getItem(USER_ID_KEY);
+  } catch {}
 
   // Items and sections of a page.get result, as far as they are used here.
   type PageItem = {
@@ -81,18 +86,31 @@ function filterHomePlaylists() {
     }
   }
 
+  function isHomeRequest(params: URLSearchParams) {
+    try {
+      return JSON.parse(params.get("gateway_input") ?? "").PAGE === "home";
+    } catch {
+      return false;
+    }
+  }
+
   window.fetch = function (this: Window, ...args) {
     const [input] = args;
     const response = originalFetch.apply(this, args);
     if (typeof input !== "string" || !input.includes("/ajax/gw-light.php")) return response;
-    const method = new URL(input, location.href).searchParams.get("method");
+    const params = new URL(input, location.href).searchParams;
+    const method = params.get("method");
     if (method === "deezer.getUserData") {
       response
         .then((res) => res.clone().json())
-        .then((body) => (userId = String(body.results.USER.USER_ID)))
+        .then((body) => {
+          userId = String(body.results.USER.USER_ID);
+          localStorage.setItem(USER_ID_KEY, userId);
+        })
         .catch(() => {});
       return response;
     }
-    return method === "page.get" ? response.then(filterResponse) : response;
+    // Other pages aren't filtered, so their responses needn't be parsed.
+    return method === "page.get" && isHomeRequest(params) ? response.then(filterResponse) : response;
   };
 }

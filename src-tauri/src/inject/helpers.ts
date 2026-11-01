@@ -29,6 +29,8 @@ function openObjectStore(dbName: string, storeName: string) {
     return new Promise<T>((resolve, reject) => {
       tx.oncomplete = () => resolve(req.result);
       tx.onerror = () => reject(tx.error);
+      // An abort, e.g. when the disk is full, doesn't always come with an error event.
+      tx.onabort = () => reject(tx.error ?? new DOMException("Transaction aborted", "AbortError"));
     });
   };
 }

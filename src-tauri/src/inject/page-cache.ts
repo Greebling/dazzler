@@ -13,6 +13,8 @@ function cachePageContent() {
   const PREFETCH_DELAY_MS = 5000;
   // A home page cached this recently isn't fetched again.
   const PREFETCH_FRESH_MS = 120 * 1000;
+  // Page requests wait this long at most for the stored responses.
+  const LOAD_TIMEOUT_MS = 1000;
   const HOME_REQUEST = "home-request";
 
   type Entry = { body: string; time: number };
@@ -20,6 +22,8 @@ function cachePageContent() {
   type HomeRequest = { key: string; url: string; init: RequestInit };
   // Stored under their key: the entries with their key, and the home page's request.
   type Stored = (Entry & { key: string }) | { home: HomeRequest };
+  // A page.get response, as far as it is used here.
+  type PageResponse = { error?: object; results?: { page_name?: string } };
 
   const cache = new Map<string, Entry>();
   const originalFetch = window.fetch;
@@ -27,19 +31,23 @@ function cachePageContent() {
   let homeRequest: HomeRequest | null = null;
   let apiToken: string | null = null;
 
-  // Fills the cache from the stored responses; page requests wait for it.
-  const loaded = request<Stored[]>("readonly", (s) => s.getAll())
-    .then((stored) => {
-      // Sorted by time, so that the map's order is the fetch order like for new entries.
-      const entries = stored.filter((v): v is Entry & { key: string } => "key" in v).sort((a, b) => a.time - b.time);
-      for (const { key, body, time } of entries) {
-        // Fetched meanwhile, which is newer.
-        if (!cache.has(key)) cache.set(key, { body, time });
-      }
-      const home = stored.find((v): v is { home: HomeRequest } => "home" in v);
-      homeRequest ??= home?.home ?? null;
-    })
-    .catch(() => {});
+  // Fills the cache from the stored responses. Page requests wait for it, but
+  // not for a stuck database.
+  const loaded = Promise.race([
+    request<Stored[]>("readonly", (s) => s.getAll())
+      .then((stored) => {
+        // Sorted by time, so that the map's order is the fetch order like for new entries.
+        const entries = stored.filter((v): v is Entry & { key: string } => "key" in v).sort((a, b) => a.time - b.time);
+        for (const { key, body, time } of entries) {
+          // Fetched meanwhile, which is newer.
+          if (!cache.has(key)) cache.set(key, { body, time });
+        }
+        const home = stored.find((v): v is { home: HomeRequest } => "home" in v);
+        homeRequest ??= home?.home ?? null;
+      })
+      .catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, LOAD_TIMEOUT_MS)),
+  ]);
 
   function store(key: string, entry: Entry) {
     cache.delete(key);
@@ -68,12 +76,8 @@ function cachePageContent() {
   }
 
   // Remembers the home page's request when it is fetched, to fetch it on the next start.
-  function rememberHome(key: string, url: string, init: RequestInit | undefined, body: string) {
-    try {
-      if (JSON.parse(body).results?.page_name !== "home" || homeRequest?.key === key) return;
-    } catch {
-      return;
-    }
+  function rememberHome(key: string, url: string, init: RequestInit | undefined, json: PageResponse) {
+    if (json.results?.page_name !== "home" || homeRequest?.key === key) return;
     const { credentials, method, mode } = init ?? {};
     homeRequest = { key, url, init: { credentials, method, mode, headers: Object.fromEntries(new Headers(init?.headers)) } };
     request("readwrite", (s) => s.put({ home: homeRequest! } satisfies Stored, HOME_REQUEST)).catch(() => {});
@@ -95,12 +99,13 @@ function cachePageContent() {
     fetchAndCache(homeRequest.key, homeRequest.url, [url.toString(), homeRequest.init]).catch(() => {});
   }
 
-  function hasError(body: string) {
+  // The parsed body, if it is a page without an error.
+  function parsePage(body: string): PageResponse | null {
     try {
-      const error = JSON.parse(body).error;
-      return error && Object.keys(error).length > 0;
+      const json: PageResponse = JSON.parse(body);
+      return json.error && Object.keys(json.error).length > 0 ? null : json;
     } catch {
-      return true;
+      return null;
     }
   }
 
@@ -109,9 +114,10 @@ function cachePageContent() {
     response
       .then((res) => (res.ok ? res.clone().text() : null))
       .then((body) => {
-        if (!body || hasError(body)) return;
-        store(key, { body, time: Date.now() });
-        rememberHome(key, url, args[1], body);
+        const json = body && parsePage(body);
+        if (!json) return;
+        store(key, { body: body!, time: Date.now() });
+        rememberHome(key, url, args[1], json);
       })
       .catch(() => {});
     return response;

@@ -136,6 +136,8 @@ function restoreScrollOnBack() {
     let settledSince: number | null = null;
     let atBottom = false;
     let tracking = false;
+    // Since when the list has been asked for more entries without having them.
+    let resizingSince: number | null = null;
 
     // Returns whether it was still restoring, rather than guarding.
     const stop = () => {
@@ -214,11 +216,14 @@ function restoreScrollOnBack() {
       // Also when Deezer has gone back to the first entries meanwhile.
       const list = count === null ? null : findProgressiveList();
       if (list && list.count < count!) {
+        resizingSince ??= now;
+        if (now - resizingSince > GIVE_UP_MS) return stop();
         settledSince = null;
         document.documentElement.classList.add(HIDING);
         list.setCount(count!);
         return;
       }
+      resizingSince = null;
       // The entry is rendered by the time the page is long enough for the
       // pixel position; if it is missing then, e.g. an unfollowed artist, the
       // pixel position is the best there is.

@@ -64,16 +64,22 @@ function addVolumeSlider() {
     value = Math.max(0, Math.min(100, value));
     show(value);
     window.dzPlayer?.control?.setVolume(value / 100, true);
-    localStorage.setItem(STORAGE_KEY, String(value));
+    try {
+      localStorage.setItem(STORAGE_KEY, String(value));
+    } catch {}
   }
 
-  // Applies the volume of the previous session once the player exists.
+  // Applies the volume of the previous session once the player can take it.
   let restored = false;
   function restoreVolume(player: DeezerPlayer) {
+    if (!player.control) return;
     restored = true;
-    const saved = localStorage.getItem(STORAGE_KEY);
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(STORAGE_KEY);
+    } catch {}
     if (saved !== null && Number.isFinite(Number(saved))) {
-      player.control?.setVolume(Number(saved) / 100, true);
+      player.control.setVolume(Number(saved) / 100, true);
     }
   }
 
@@ -85,15 +91,20 @@ function addVolumeSlider() {
     show(player.muted ? 0 : Math.round(player.volume * 100));
   }
 
-  // Deezer's React UI may re-render the player bar, so this runs on every DOM change.
+  // Deezer's React UI may re-render the player bar, so this runs on every DOM
+  // change; mostly the slider is still in place.
   function mount() {
+    if (slider.isConnected && slider.parentElement?.firstElementChild === slider) return;
     const group = document.querySelector('[data-testid^="volume_button"]')?.parentElement;
     if (group && group.firstElementChild !== slider) group.prepend(slider);
   }
 
   input.addEventListener("input", () => setVolume(Number(input.value)));
   input.addEventListener("pointerdown", () => (dragging = true));
-  input.addEventListener("pointerup", () => (dragging = false));
+  // The pointer may be released outside the slider.
+  for (const type of ["pointerup", "pointercancel"]) {
+    window.addEventListener(type, () => (dragging = false), true);
+  }
   slider.addEventListener(
     "wheel",
     (e) => {
@@ -125,6 +136,8 @@ function smoothProgressBar() {
   const SEEK_TIMEOUT_MS = 1500;
   const SEEK_TOLERANCE = 0.01;
   const TRACK = '.slider-track:has(> [data-testid="progress_bar"])';
+  // While nothing moves (paused, no seek), Deezer's own updates are followed this often.
+  const IDLE_INTERVAL_MS = 200;
   let lastPosition: number | null = null;
   let lastTime = 0;
   let dragging = false;
@@ -186,14 +199,41 @@ function smoothProgressBar() {
     return Math.min(1, (position + elapsed) / duration);
   }
 
+  // Runs frame on the next frame, or after a while when idle.
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let frameRequested = false;
+  function schedule(idle: boolean) {
+    if (frameRequested || idleTimer !== null) return;
+    if (idle) {
+      idleTimer = setTimeout(() => {
+        idleTimer = null;
+        schedule(false);
+      }, IDLE_INTERVAL_MS);
+    } else {
+      frameRequested = true;
+      requestAnimationFrame((now) => {
+        frameRequested = false;
+        frame(now);
+      });
+    }
+  }
+
+  // Ends an idle wait, e.g. when the user starts seeking.
+  function wake() {
+    if (idleTimer === null) return;
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    schedule(false);
+  }
+
   function frame(now: number) {
-    requestAnimationFrame(frame);
+    let progress = dragging ? null : smoothedProgress(now);
+    schedule(progress === null && !dragging && !seek);
     const input = progressInput();
     const track = input?.parentElement;
     if (!input || !track) return;
     // Lets clicks land between whole seconds; they are floored on release.
     if (input.step !== "any") input.step = "any";
-    let progress = dragging ? null : smoothedProgress(now);
     if (progress === null) {
       lastPosition = null;
       progress = dragging
@@ -213,7 +253,10 @@ function smoothProgressBar() {
   document.addEventListener(
     "pointerdown",
     (e) => {
-      if ((e.target as Element).closest?.('[data-testid="progress_bar"]')) dragging = true;
+      if ((e.target as Element).closest?.('[data-testid="progress_bar"]')) {
+        dragging = true;
+        wake();
+      }
     },
     true,
   );
@@ -234,9 +277,10 @@ function smoothProgressBar() {
           seek = { target, distance, until: performance.now() + SEEK_TIMEOUT_MS };
         }
         dragging = false;
+        wake();
       },
       true,
     );
   }
-  requestAnimationFrame(frame);
+  schedule(false);
 }
