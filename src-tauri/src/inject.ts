@@ -64,6 +64,25 @@
     onReady(() => document.head.append(style));
   }
 
+  // An object store in an IndexedDB database of its own, as a function that
+  // runs a request on it in a transaction and resolves with its result.
+  function openObjectStore(dbName: string, storeName: string) {
+    const db = new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(storeName);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>) => {
+      const tx = (await db).transaction(storeName, mode);
+      const req = run(tx.objectStore(storeName));
+      return new Promise<T>((resolve, reject) => {
+        tx.oncomplete = () => resolve(req.result);
+        tx.onerror = () => reject(tx.error);
+      });
+    };
+  }
+
   // --- Media keys ---
 
   // Captures the Media Session handlers Deezer registers, as a fallback for
@@ -104,19 +123,97 @@
 
   // Deezer fetches page content (page.get) fresh on every visit, which takes
   // up to a second. Serves the last response at once and refreshes it in the
-  // background, so returning to e.g. the home page is instant.
+  // background, so returning to e.g. the home page is instant. The responses
+  // are kept across restarts, and the home page is fetched once the app has
+  // started, as the first visit to it after starting has nothing cached yet
+  // (the start page's content comes embedded in the HTML instead).
   function cachePageContent() {
-    const MAX_AGE_MS = 15 * 60 * 1000;
-    const cache = new Map<string, { body: string; time: number }>();
-    const originalFetch = window.fetch;
+    const MAX_AGE_MS = 48 * 60 * 60 * 1000; // h m s ms
+    const MAX_ENTRIES = 100;
+    // After Deezer's first request, so it doesn't compete with the start page loading.
+    const PREFETCH_DELAY_MS = 5000;
+    // A home page cached this recently isn't fetched again.
+    const PREFETCH_FRESH_MS = 120 * 1000;
+    const HOME_REQUEST = "home-request";
 
-    // Per-request (cid) and per-session (api_token) parameters don't change the content.
-    function cacheKey(url: RequestInfo | URL) {
+    type Entry = { body: string; time: number };
+    // The request for the home page, without its per-request parameters.
+    type HomeRequest = { key: string; url: string; init: RequestInit };
+    // Stored under their key: the entries with their key, and the home page's request.
+    type Stored = (Entry & { key: string }) | { home: HomeRequest };
+
+    const cache = new Map<string, Entry>();
+    const originalFetch = window.fetch;
+    const request = openObjectStore("dazzler-pages", "pages");
+    let homeRequest: HomeRequest | null = null;
+    let apiToken: string | null = null;
+
+    // Fills the cache from the stored responses; page requests wait for it.
+    const loaded = request<Stored[]>("readonly", (s) => s.getAll())
+      .then((stored) => {
+        // Sorted by time, so that the map's order is the fetch order like for new entries.
+        const entries = stored.filter((v): v is Entry & { key: string } => "key" in v).sort((a, b) => a.time - b.time);
+        for (const { key, body, time } of entries) {
+          // Fetched meanwhile, which is newer.
+          if (!cache.has(key)) cache.set(key, { body, time });
+        }
+        const home = stored.find((v): v is { home: HomeRequest } => "home" in v);
+        homeRequest ??= home?.home ?? null;
+      })
+      .catch(() => {});
+
+    function store(key: string, entry: Entry) {
+      cache.delete(key);
+      cache.set(key, entry);
+      // The map is in insertion order, so the first entries are the least recently fetched.
+      const removed = [...cache.keys()].slice(0, Math.max(0, cache.size - MAX_ENTRIES));
+      for (const old of removed) cache.delete(old);
+      request("readwrite", (s) => {
+        for (const old of removed) s.delete(old);
+        return s.put({ ...entry, key } satisfies Stored, key);
+      }).catch(() => {});
+    }
+
+    // Per-request (cid) and per-session (api_token) parameters don't change
+    // the content, but the user (in a header) does.
+    function pageUrl(url: RequestInfo | URL) {
       if (typeof url !== "string" || !url.includes("method=page.get")) return null;
       const u = new URL(url, location.href);
       u.searchParams.delete("cid");
       u.searchParams.delete("api_token");
       return u.toString();
+    }
+
+    function cacheKey(url: string, init?: RequestInit) {
+      return `${url}#user=${new Headers(init?.headers).get("x-deezer-user") ?? ""}`;
+    }
+
+    // Remembers the home page's request when it is fetched, to fetch it on the next start.
+    function rememberHome(key: string, url: string, init: RequestInit | undefined, body: string) {
+      try {
+        if (JSON.parse(body).results?.page_name !== "home" || homeRequest?.key === key) return;
+      } catch {
+        return;
+      }
+      const { credentials, method, mode } = init ?? {};
+      homeRequest = { key, url, init: { credentials, method, mode, headers: Object.fromEntries(new Headers(init?.headers)) } };
+      request("readwrite", (s) => s.put({ home: homeRequest! } satisfies Stored, HOME_REQUEST)).catch(() => {});
+    }
+
+    // Deezer's requests carry the session's api_token, which a request of our own needs too.
+    function noteApiToken(input: RequestInfo | URL) {
+      if (apiToken || typeof input !== "string" || !input.includes("/ajax/gw-light.php")) return;
+      apiToken = new URL(input, location.href).searchParams.get("api_token") || null;
+      if (apiToken) setTimeout(() => loaded.then(prefetchHome), PREFETCH_DELAY_MS);
+    }
+
+    function prefetchHome() {
+      const cached = homeRequest && cache.get(homeRequest.key);
+      if (!homeRequest || !apiToken || (cached && Date.now() - cached.time < PREFETCH_FRESH_MS)) return;
+      const url = new URL(homeRequest.url);
+      url.searchParams.set("api_token", apiToken);
+      url.searchParams.set("cid", String(Math.floor(Math.random() * 1e9)));
+      fetchAndCache(homeRequest.key, homeRequest.url, [url.toString(), homeRequest.init]).catch(() => {});
     }
 
     function hasError(body: string) {
@@ -128,12 +225,14 @@
       }
     }
 
-    function fetchAndCache(key: string, args: Parameters<typeof fetch>) {
+    function fetchAndCache(key: string, url: string, args: Parameters<typeof fetch>) {
       const response = originalFetch.apply(window, args);
       response
         .then((res) => (res.ok ? res.clone().text() : null))
         .then((body) => {
-          if (body && !hasError(body)) cache.set(key, { body, time: Date.now() });
+          if (!body || hasError(body)) return;
+          store(key, { body, time: Date.now() });
+          rememberHome(key, url, args[1], body);
         })
         .catch(() => {});
       return response;
@@ -141,17 +240,19 @@
 
     window.fetch = function (this: Window, ...args) {
       const [input, init] = args;
-      const key = cacheKey(input);
-      if (!key || (init?.method && init.method !== "GET")) {
+      noteApiToken(input);
+      const url = pageUrl(input);
+      if (!url || (init?.method && init.method !== "GET")) {
         return originalFetch.apply(this, args);
       }
-      const cached = cache.get(key);
-      const refresh = fetchAndCache(key, args);
-      if (!cached || Date.now() - cached.time > MAX_AGE_MS) return refresh;
-      refresh.catch(() => {});
-      return Promise.resolve(
-        new Response(cached.body, { headers: { "Content-Type": "application/json" } }),
-      );
+      const key = cacheKey(url, init);
+      const refresh = fetchAndCache(key, url, args);
+      return loaded.then(() => {
+        const cached = cache.get(key);
+        if (!cached || Date.now() - cached.time > MAX_AGE_MS) return refresh;
+        refresh.catch(() => {});
+        return new Response(cached.body, { headers: { "Content-Type": "application/json" } });
+      });
     };
   }
 
@@ -417,6 +518,8 @@
     const SETTLE_MS = 300;
     const GIVE_UP_MS = 3000;
     const MAX_MS = 60_000;
+    // How long the list is watched for going back to its first entries after the position is restored.
+    const GUARD_MS = 10_000;
     // The list loads its next entries when the bottom comes into view again, so
     // it has to leave the view in between; this is much quicker than staying at the bottom.
     const WIGGLE_PX = 300;
@@ -428,21 +531,20 @@
     type Saved = { y: number; anchor: Anchor | null; count: number | null };
     const positions = new Map<string, Saved>();
     let currentPath = location.pathname;
-    let cancel: (() => void) | null = null;
+    // Stops restoring or guarding the position; returns whether it was still restoring.
+    let cancel: (() => boolean) | null = null;
     // Otherwise the browser scrolls before popstate, and the position of the page being left is lost.
     history.scrollRestoration = "manual";
 
     // Called right before the page changes, while its scroll position is still intact.
     function leave() {
       // Left while still restoring: the position isn't the user's, keep the saved one.
-      if (cancel) cancel();
-      else {
-        positions.set(currentPath, {
-          y: window.scrollY,
-          anchor: findAnchor(),
-          count: findProgressiveList()?.count ?? null,
-        });
-      }
+      if (cancel?.()) return;
+      positions.set(currentPath, {
+        y: window.scrollY,
+        anchor: findAnchor(),
+        count: findProgressiveList()?.count ?? null,
+      });
     }
 
     function arrive() {
@@ -473,27 +575,84 @@
       true,
     );
 
-    function restore({ y, anchor, count }: Saved) {
+    function restore(saved: Saved) {
       const path = currentPath;
+      let { y, anchor, count } = saved;
       const start = Date.now();
+      let timer: ReturnType<typeof setInterval> | null = null;
+      let guardTimer: ReturnType<typeof setTimeout> | null = null;
       let lastHeight = 0;
       let lastGrowth = start;
       let settledSince: number | null = null;
       let atBottom = false;
-      // Without a saved count there is no list to resize.
-      let resized = count === null;
+      let tracking = false;
 
+      // Returns whether it was still restoring, rather than guarding.
       const stop = () => {
-        clearInterval(timer);
+        const restoring = timer !== null;
+        if (timer !== null) clearInterval(timer);
+        if (guardTimer !== null) clearTimeout(guardTimer);
+        observer.disconnect();
         document.documentElement.classList.remove(HIDING);
-        for (const type of INTERACTIONS) window.removeEventListener(type, stop, true);
+        for (const type of INTERACTIONS) window.removeEventListener(type, interrupt, true);
+        window.removeEventListener("scroll", track);
         if (cancel === stop) cancel = null;
+        return restoring;
+      };
+      // The user scrolling takes over, with the list still watched; not while
+      // the page is hidden, though, as the position is meaningless then. Nor
+      // does a click, e.g. one that focuses the window, except on the scrollbar.
+      const interrupt = (event: Event) => {
+        if (timer === null || document.documentElement.classList.contains(HIDING)) return;
+        if (event.type !== "mousedown" || event.target === document.documentElement) settle();
       };
       const INTERACTIONS = ["wheel", "touchstart", "keydown", "mousedown"];
-      for (const type of INTERACTIONS) window.addEventListener(type, stop, true);
+      for (const type of INTERACTIONS) window.addEventListener(type, interrupt, true);
       cancel = stop;
 
-      const timer = setInterval(() => {
+      // Deezer's list goes back to its first entries whenever it is given its
+      // items anew, which happens a moment after the page is shown again, e.g.
+      // after the position was restored. For a while after, the list is
+      // lengthened again and the position restored, before the short list is
+      // painted. Once the user has scrolled, it is their position.
+      const observer = new MutationObserver(() => {
+        const list = timer === null && count !== null ? findProgressiveList() : null;
+        if (!list || list.count >= count!) return;
+        document.documentElement.classList.add(HIDING);
+        run();
+      });
+      function track() {
+        if (tracking) return;
+        tracking = true;
+        requestAnimationFrame(() => {
+          tracking = false;
+          if (timer !== null) return;
+          y = window.scrollY;
+          anchor = findAnchor();
+          count = Math.max(count ?? 0, findProgressiveList()?.count ?? 0);
+        });
+      }
+
+      function settle() {
+        clearInterval(timer!);
+        timer = null;
+        document.documentElement.classList.remove(HIDING);
+        // Without a count there is no list to watch.
+        if (count === null) return stop();
+        if (guardTimer !== null) return;
+        guardTimer = setTimeout(stop, GUARD_MS);
+        observer.observe(document.body, { childList: true, subtree: true });
+        window.addEventListener("scroll", track, { passive: true });
+      }
+
+      function run() {
+        lastHeight = 0;
+        lastGrowth = Date.now();
+        settledSince = null;
+        timer = setInterval(tick, INTERVAL_MS);
+      }
+
+      function tick() {
         const now = Date.now();
         if (location.pathname !== path || now - start > MAX_MS) return stop();
         const height = document.documentElement.scrollHeight;
@@ -502,16 +661,13 @@
           lastGrowth = now;
         }
         const maxScroll = height - window.innerHeight;
-        if (!resized) {
-          const list = findProgressiveList();
-          if (list) {
-            resized = true;
-            if (list.count < count!) {
-              document.documentElement.classList.add(HIDING);
-              list.setCount(count!);
-            }
-            return;
-          }
+        // Also when Deezer has gone back to the first entries meanwhile.
+        const list = count === null ? null : findProgressiveList();
+        if (list && list.count < count!) {
+          settledSince = null;
+          document.documentElement.classList.add(HIDING);
+          list.setCount(count!);
+          return;
         }
         // The entry is rendered by the time the page is long enough for the
         // pixel position; if it is missing then, e.g. an unfollowed artist, the
@@ -522,7 +678,7 @@
           // Deezer may still replace the content or scroll, so wait until it stays put.
           if (Math.abs(window.scrollY - target) > 1) settledSince = null;
           else if (settledSince === null) settledSince = now;
-          else if (now - settledSince >= SETTLE_MS) stop();
+          else if (now - settledSince >= SETTLE_MS) settle();
         } else {
           // Scrolling to the bottom makes the list load its next entries.
           settledSince = null;
@@ -531,7 +687,11 @@
           window.scrollTo(0, atBottom ? maxScroll : Math.max(0, maxScroll - WIGGLE_PX));
           if (now - lastGrowth > GIVE_UP_MS) stop();
         }
-      }, INTERVAL_MS);
+      }
+
+      // A list starts out with its first entries, which shouldn't show.
+      if (count !== null) document.documentElement.classList.add(HIDING);
+      run();
     }
   }
 
@@ -765,33 +925,13 @@
   // Deezer's web player always starts with a default playlist, so the queue,
   // track and position are saved here and restored on startup.
   function resumePlayback() {
-    const DB_NAME = "dazzler";
-    const STORE = "resume";
     const SAVE_INTERVAL_MS = 3000;
-    const db = openDatabase();
+    const request = openObjectStore("dazzler", "resume");
     let restored = false;
     let savedSignature: string | null = null;
 
     type SavedQueue = { data: DeezerTrack[]; context: DeezerContext; type: string };
     type SavedPosition = { signature: string; index: number; offset: number };
-
-    function openDatabase() {
-      return new Promise<IDBDatabase>((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
-        req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-    }
-
-    async function request<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>) {
-      const tx = (await db).transaction(STORE, mode);
-      const req = run(tx.objectStore(STORE));
-      return new Promise<T>((resolve, reject) => {
-        tx.oncomplete = () => resolve(req.result);
-        tx.onerror = () => reject(tx.error);
-      });
-    }
 
     // The player, once it has loaded a track list.
     function loadedPlayer() {
