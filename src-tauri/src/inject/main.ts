@@ -14,6 +14,7 @@ if (!window.__dazzler && window.top === window) {
   simplifyAccountMenu();
   hideAccountAppsTab();
   replaceContextMenu();
+  playArtistTopTracks();
   restoreScrollOnBack();
   enlargePlayerBar();
   addVolumeSlider();

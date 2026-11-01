@@ -65,27 +65,11 @@ function resumePlayback() {
   // (dzPlayer.play with context type player_default_playlist). The saved
   // queue is played in its place, so the default track never shows.
   let replacedDefault = false;
-  let dzPlayer = window.dzPlayer;
-  Object.defineProperty(window, "dzPlayer", {
-    configurable: true,
-    get: () => dzPlayer,
-    set(player: DeezerPlayer | undefined) {
-      dzPlayer = player;
-      const play = player?.play;
-      if (!player || typeof play !== "function" || play.dazzlerWrapped) return;
-      player.play = async function (this: DeezerPlayer, ...args: Parameters<DeezerPlayer["play"]>) {
-        const [options] = args;
-        if (!restored && !replacedDefault && options?.context?.TYPE === "player_default_playlist") {
-          const saved = await savedPlayOptions().catch(() => null);
-          if (saved) {
-            replacedDefault = true;
-            return play.call(this, saved);
-          }
-        }
-        return play.apply(this, args);
-      };
-      player.play.dazzlerWrapped = true;
-    },
+  replacePlayOptions(async (options) => {
+    if (restored || replacedDefault || options.context?.TYPE !== "player_default_playlist") return null;
+    const saved = await savedPlayOptions().catch(() => null);
+    if (saved) replacedDefault = true;
+    return saved;
   });
 
   // Waits for the player to load a track list before replacing it.
