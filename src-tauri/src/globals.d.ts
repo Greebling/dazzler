@@ -70,6 +70,8 @@ interface Window {
   };
   // Set by settings.ts.
   __dazzlerSettings?: boolean;
+  // Set by theme-settings.ts.
+  __dazzlerThemeSettings?: boolean;
   __TAURI_INTERNALS__: { invoke<T = unknown>(command: string, args?: unknown): Promise<T> };
   playerProxy?: { control?: DeezerPlayerControl };
   dzPlayer?: DeezerPlayer;

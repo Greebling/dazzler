@@ -76,3 +76,40 @@ function moveArtistTourDatesDown() {
     }
   `);
 }
+
+// --- Account menu ---
+
+// Leaves only "Konto-Einstellungen", "Design und Farbe" and "Abmelden" in that
+// order in the menu of the profile picture (top right), all in the primary text
+// color and spacing Deezer gives its main entries. The header with the user's
+// name stays as it is.
+function simplifyAccountMenu() {
+  const menu = ".popper-account .account-menu";
+  const order = ["account", "display", "logout"];
+  addStyle(`
+    ${menu} {
+      display: flex;
+      flex-direction: column;
+    }
+    ${menu} > .account-item { display: none; }
+    ${order
+      .map((id, i) => `${menu} > .account-item[data-testid="${id}"] { display: block; order: ${i}; }`)
+      .join("\n    ")}
+    ${menu} > .account-item.is-divider {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: none;
+    }
+    ${menu} .account-link {
+      padding: 12px;
+      color: var(--tempo-colors-text-neutral-primary-default);
+    }
+  `);
+}
+
+// --- Account settings ---
+
+// Hides the "Meine Apps" tab of the account settings.
+function hideAccountAppsTab() {
+  addStyle(`.navbar-item:has(> [data-testid="apps-tab"]) { display: none !important; }`);
+}

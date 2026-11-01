@@ -11,6 +11,8 @@ if (!window.__dazzler && window.top === window) {
   hideQuickAccessHint();
   hideQuickAccessPins();
   moveArtistTourDatesDown();
+  simplifyAccountMenu();
+  hideAccountAppsTab();
   restoreScrollOnBack();
   enlargePlayerBar();
   addVolumeSlider();

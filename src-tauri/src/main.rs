@@ -16,8 +16,9 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 const DEEZER_URL: &str = "https://www.deezer.com/";
 const INJECT_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/inject.js"));
 const SETTINGS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/settings.js"));
-// Used by settings.js, so injected before it.
+// Used by theme-settings.js, so injected before it.
 const COLOR_PICKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/color-picker.js"));
+const THEME_SETTINGS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/theme-settings.js"));
 
 // Passed by the autostart entry, so an autostarted client doesn't take the focus.
 const AUTOSTART_ARG: &str = "--autostart";
@@ -258,6 +259,7 @@ fn main() {
                     .initialization_script(INJECT_JS)
                     .initialization_script(COLOR_PICKER_JS)
                     .initialization_script(SETTINGS_JS)
+                    .initialization_script(THEME_SETTINGS_JS)
                     .on_page_load(|window, payload| {
                         if payload.event() == PageLoadEvent::Finished {
                             remember_start_url(window.app_handle(), payload.url());

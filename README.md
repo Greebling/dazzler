@@ -19,12 +19,6 @@ Improvements compared to the official Deezer client:
 > **Unofficial.** This project is not affiliated with, endorsed by or supported by Deezer.
 Tested on Windows - Linux and macOS builds are untested.
 
-
-## Settings
-You can find the Dazzler settings under ```Account Settings -> Dazzler```:
-- Custom theme settings
-- Autostart
-
 ## Commands
 
 ```bash
