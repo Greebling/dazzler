@@ -49,9 +49,25 @@ interface DeezerPlayer {
   play: ((options: DeezerPlayOptions) => unknown) & { dazzlerWrapped?: boolean };
 }
 
+// Set by inject/custom-theme.ts for settings.ts: the generated colors of both modes.
+interface DazzlerThemeMode {
+  background: string;
+  text: string;
+  accent: string;
+  onAccent: string;
+  // WCAG contrast ratios of text on the background, and of the on-accent text on the accent.
+  textContrast: number;
+  accentContrast: number;
+}
+
 interface Window {
   // Set by inject.ts; called from main.rs.
   __dazzler?: { media(action: MediaAction): void; beforeClose(): void };
+  __dazzlerTheme?: {
+    settings: { enabled: boolean; primary: string; background: string };
+    light: DazzlerThemeMode;
+    dark: DazzlerThemeMode;
+  };
   // Set by settings.ts.
   __dazzlerSettings?: boolean;
   __TAURI_INTERNALS__: { invoke<T = unknown>(command: string, args?: unknown): Promise<T> };

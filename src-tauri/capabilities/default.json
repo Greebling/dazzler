@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the injected settings tab (settings.js) on deezer.com toggle autostart.",
+  "description": "Lets the injected settings tab (settings.js) on deezer.com toggle autostart, and the injected theme script remember the page background.",
   "windows": ["main"],
   "remote": {
     "urls": ["https://www.deezer.com/*"]
@@ -9,6 +9,7 @@
   "permissions": [
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "autostart:allow-is-enabled",
+    "allow-set-background-color"
   ]
 }

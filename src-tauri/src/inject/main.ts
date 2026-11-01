@@ -2,6 +2,7 @@
 // the scripts in this directory into one, inside a function of its own, with
 // this one last, so everything the others declare is there when it runs.
 if (!window.__dazzler && window.top === window) {
+  customizeColors();
   captureMediaSessionHandlers();
   cachePageContent();
   filterHomePlaylists();

@@ -16,6 +16,8 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 const DEEZER_URL: &str = "https://www.deezer.com/";
 const INJECT_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/inject.js"));
 const SETTINGS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/settings.js"));
+// Used by settings.js, so injected before it.
+const COLOR_PICKER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/js/color-picker.js"));
 
 // Passed by the autostart entry, so an autostarted client doesn't take the focus.
 const AUTOSTART_ARG: &str = "--autostart";
@@ -188,6 +190,39 @@ fn remember_start_url(app: &AppHandle, loaded: &tauri::Url) {
     let _ = std::fs::write(dir.join(START_URL_FILE), url);
 }
 
+const BACKGROUND_FILE: &str = "background.txt";
+
+/// The page's background color when the client last ran, so the window doesn't
+/// show the wrong color (e.g. black with a light theme) until the page paints.
+fn start_background(app: &AppHandle) -> Color {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join(BACKGROUND_FILE)).ok())
+        .and_then(|color| parse_hex_color(color.trim()))
+        .unwrap_or(Color(0, 0, 0, 255))
+}
+
+/// Parses "#rrggbb".
+fn parse_hex_color(color: &str) -> Option<Color> {
+    let hex = color.strip_prefix('#').filter(|hex| hex.len() == 6)?;
+    let value = u32::from_str_radix(hex, 16).ok()?;
+    Some(Color((value >> 16) as u8, (value >> 8) as u8, value as u8, 255))
+}
+
+/// Called by inject/custom-theme.ts whenever the page's background color changes.
+#[tauri::command]
+fn set_background_color(app: AppHandle, color: String) {
+    if parse_hex_color(&color).is_none() {
+        return;
+    }
+    let Ok(dir) = app.path().app_local_data_dir() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(BACKGROUND_FILE), color);
+}
+
 fn main() {
     let builder = tauri::Builder::default()
         // Saves window position/size/maximized on exit; restored manually in setup.
@@ -213,14 +248,15 @@ fn main() {
                     .title("Dazzler")
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(800.0, 600.0)
-                    // Deezer's background, so the window isn't white until the page paints.
-                    .background_color(Color(0, 0, 0, 255))
+                    // The page's background, so the window isn't white until the page paints.
+                    .background_color(start_background(app.handle()))
                     .visible(false)
                     // Autostarted, it appears as usual but without taking the focus. Windows
                     // would flash it in the taskbar instead, unless it can't be activated at all.
                     .focused(!autostarted)
                     .focusable(!autostarted)
                     .initialization_script(INJECT_JS)
+                    .initialization_script(COLOR_PICKER_JS)
                     .initialization_script(SETTINGS_JS)
                     .on_page_load(|window, payload| {
                         if payload.event() == PageLoadEvent::Finished {
@@ -265,6 +301,7 @@ fn main() {
             setup_media_controls(app.handle());
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![set_background_color])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 close_gracefully(window, api);

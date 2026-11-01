@@ -3,7 +3,10 @@ use std::process::Command;
 
 fn main() {
     compile_scripts();
-    tauri_build::build()
+    // The app's own commands, allowed to deezer.com in capabilities/default.json.
+    let manifest = tauri_build::AppManifest::new().commands(&["set_background_color"]);
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
+        .expect("failed to run tauri-build")
 }
 
 /// Compiles the injected scripts (src/**/*.ts) into OUT_DIR/js, where main.rs includes them from.

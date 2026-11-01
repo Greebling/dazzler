@@ -5,6 +5,7 @@ Dazzler is an unofficial, minimal desktop wrapper alternative for https://www.de
 Improvements compared to the official Deezer client:
 - You can actually select the language of the interface
 - Has a volume slider that you can directly use
+- Custom theme support
 - Faster page loading, particularly for the home page
 - Your own playlist are now placed right below last played in the home screen
 - Bigger play buttons with smoothly animated progress bar
@@ -20,7 +21,9 @@ Tested on Windows - Linux and macOS builds are untested.
 
 
 ## Settings
-You can find the Dazzler settings under ```Account Settings -> Dazzler```
+You can find the Dazzler settings under ```Account Settings -> Dazzler```:
+- Custom theme settings
+- Autostart
 
 ## Commands
 
