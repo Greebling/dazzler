@@ -13,6 +13,7 @@ if (!window.__dazzler && window.top === window) {
   moveArtistTourDatesDown();
   simplifyAccountMenu();
   hideAccountAppsTab();
+  replaceContextMenu();
   restoreScrollOnBack();
   enlargePlayerBar();
   addVolumeSlider();
