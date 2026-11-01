@@ -12,5 +12,7 @@
     "outDir": "src-tauri/target/js",
     "newLine": "lf"
   },
-  "include": ["src-tauri/src/**/*.ts"]
+  "include": ["src-tauri/src/**/*.ts"],
+  // A project of its own (see its tsconfig.json).
+  "exclude": ["src-tauri/src/inject"]
 }

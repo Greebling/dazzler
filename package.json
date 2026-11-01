@@ -7,7 +7,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "icons": "node scripts/icons.mts",
-    "typecheck": "tsc --noEmit && tsc -p scripts"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src-tauri/src/inject && tsc -p scripts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

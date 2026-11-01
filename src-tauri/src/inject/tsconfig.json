@@ -1,0 +1,11 @@
+{
+  // The scripts build.rs joins into inject.js. They share one scope there, so
+  // they are a project of their own, apart from the other injected scripts.
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../../target/js/inject"
+  },
+  "include": ["*.ts", "../globals.d.ts"],
+  "exclude": []
+}
