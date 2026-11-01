@@ -28,6 +28,7 @@
   hideQuickAccessHint();
   hideQuickAccessPins();
   moveArtistTourDatesDown();
+  restoreScrollOnBack();
   enlargePlayerBar();
   addVolumeSlider();
   smoothProgressBar();
@@ -344,6 +345,194 @@
       }
       .naboo, .page-topbar + div > div { padding-bottom: ${height}px !important; }
     `);
+  }
+
+  // --- Scroll restoration ---
+
+  // React internals of Deezer's progressively rendered lists (e.g. the followed
+  // artists): all items are known up front, but only the first `count` are
+  // rendered, and the count is raised while scrolling.
+  type Hook = { memoizedState: unknown; queue: { dispatch?: (count: number) => void } | null; next: Hook | null };
+  type Fiber = {
+    child: Fiber | null;
+    sibling: Fiber | null;
+    memoizedProps: { items?: unknown; renderItem?: unknown } | null;
+    memoizedState: Hook | null;
+  };
+
+  // The rendered count of the progressive list on the page, if there is one.
+  function findProgressiveList() {
+    const grid = document.querySelector('[data-testid="thumbnail-grid"]');
+    const key = grid && Object.keys(grid).find((k) => k.startsWith("__reactFiber"));
+    if (!grid || !key) return null;
+
+    const find = (fiber: Fiber | null, depth: number): Fiber | null => {
+      for (; fiber; fiber = fiber.sibling) {
+        const props = fiber.memoizedProps;
+        if (Array.isArray(props?.items) && typeof props.renderItem === "function") return fiber;
+        const found = depth < 4 ? find(fiber.child, depth + 1) : null;
+        if (found) return found;
+      }
+      return null;
+    };
+    const list = find((grid as unknown as Record<string, Fiber>)[key].child, 0);
+    for (let hook = list?.memoizedState ?? null; hook; hook = hook.next) {
+      const setCount = hook.queue?.dispatch;
+      if (setCount && typeof hook.memoizedState === "number") {
+        return { count: hook.memoizedState, setCount };
+      }
+    }
+    return null;
+  }
+
+  // A position in a list: the first entry link in view, and its distance from the top.
+  type Anchor = { href: string; top: number };
+
+  function findAnchor(): Anchor | null {
+    const links = document.querySelectorAll<HTMLAnchorElement>('[data-testid="thumbnail-grid"] a[href]');
+    for (const link of links) {
+      const top = link.getBoundingClientRect().top;
+      if (top >= 0) return { href: link.getAttribute("href")!, top };
+    }
+    return null;
+  }
+
+  // The scroll position that puts the anchor back where it was, once its entry is rendered.
+  function anchorScrollY(anchor: Anchor) {
+    const selector = `[data-testid="thumbnail-grid"] a[href="${CSS.escape(anchor.href)}"]`;
+    const link = document.querySelector(selector);
+    return link && window.scrollY + link.getBoundingClientRect().top - anchor.top;
+  }
+
+  // Long lists render more entries while scrolling, so after going back, the
+  // page is too short for the position it was left at and Deezer's own
+  // restoration ends up higher. Remembers the scroll position, the entry at the
+  // top and the rendered count of each page when it is left. After going back
+  // it renders that many entries at once, and scrolls down for any that are
+  // still missing, with the page hidden meanwhile. Scrolling to the entry
+  // rather than to the pixel position keeps working when the window was
+  // resized or something above the list has a different height.
+  function restoreScrollOnBack() {
+    const INTERVAL_MS = 30;
+    const SETTLE_MS = 300;
+    const GIVE_UP_MS = 3000;
+    const MAX_MS = 60_000;
+    // The list loads its next entries when the bottom comes into view again, so
+    // it has to leave the view in between; this is much quicker than staying at the bottom.
+    const WIGGLE_PX = 300;
+    const HIDING = "dazzler-restoring";
+    addStyle(`
+      .page-main { transition: opacity 0.15s; }
+      .${HIDING} .page-main { opacity: 0 !important; transition: none; }
+    `);
+    type Saved = { y: number; anchor: Anchor | null; count: number | null };
+    const positions = new Map<string, Saved>();
+    let currentPath = location.pathname;
+    let cancel: (() => void) | null = null;
+    // Otherwise the browser scrolls before popstate, and the position of the page being left is lost.
+    history.scrollRestoration = "manual";
+
+    // Called right before the page changes, while its scroll position is still intact.
+    function leave() {
+      // Left while still restoring: the position isn't the user's, keep the saved one.
+      if (cancel) cancel();
+      else {
+        positions.set(currentPath, {
+          y: window.scrollY,
+          anchor: findAnchor(),
+          count: findProgressiveList()?.count ?? null,
+        });
+      }
+    }
+
+    function arrive() {
+      currentPath = location.pathname;
+    }
+
+    for (const method of ["pushState", "replaceState"] as const) {
+      const original = history[method];
+      history[method] = function (this: History, ...args: Parameters<History["pushState"]>) {
+        const url = args[2];
+        const changes = url != null && new URL(url, location.href).pathname !== currentPath;
+        if (changes) leave();
+        const result = original.apply(this, args);
+        if (changes) arrive();
+        return result;
+      };
+    }
+
+    // Captured, to run before Deezer's router renders the next page.
+    window.addEventListener(
+      "popstate",
+      () => {
+        leave();
+        arrive();
+        const saved = positions.get(currentPath);
+        if (saved?.y) restore(saved);
+      },
+      true,
+    );
+
+    function restore({ y, anchor, count }: Saved) {
+      const path = currentPath;
+      const start = Date.now();
+      let lastHeight = 0;
+      let lastGrowth = start;
+      let settledSince: number | null = null;
+      let atBottom = false;
+      // Without a saved count there is no list to resize.
+      let resized = count === null;
+
+      const stop = () => {
+        clearInterval(timer);
+        document.documentElement.classList.remove(HIDING);
+        for (const type of INTERACTIONS) window.removeEventListener(type, stop, true);
+        if (cancel === stop) cancel = null;
+      };
+      const INTERACTIONS = ["wheel", "touchstart", "keydown", "mousedown"];
+      for (const type of INTERACTIONS) window.addEventListener(type, stop, true);
+      cancel = stop;
+
+      const timer = setInterval(() => {
+        const now = Date.now();
+        if (location.pathname !== path || now - start > MAX_MS) return stop();
+        const height = document.documentElement.scrollHeight;
+        if (height > lastHeight) {
+          lastHeight = height;
+          lastGrowth = now;
+        }
+        const maxScroll = height - window.innerHeight;
+        if (!resized) {
+          const list = findProgressiveList();
+          if (list) {
+            resized = true;
+            if (list.count < count!) {
+              document.documentElement.classList.add(HIDING);
+              list.setCount(count!);
+            }
+            return;
+          }
+        }
+        // The entry is rendered by the time the page is long enough for the
+        // pixel position; if it is missing then, e.g. an unfollowed artist, the
+        // pixel position is the best there is.
+        const target = Math.max(0, (anchor && anchorScrollY(anchor)) ?? y);
+        if (maxScroll >= target) {
+          window.scrollTo(0, target);
+          // Deezer may still replace the content or scroll, so wait until it stays put.
+          if (Math.abs(window.scrollY - target) > 1) settledSince = null;
+          else if (settledSince === null) settledSince = now;
+          else if (now - settledSince >= SETTLE_MS) stop();
+        } else {
+          // Scrolling to the bottom makes the list load its next entries.
+          settledSince = null;
+          document.documentElement.classList.add(HIDING);
+          atBottom = !atBottom;
+          window.scrollTo(0, atBottom ? maxScroll : Math.max(0, maxScroll - WIGGLE_PX));
+          if (now - lastGrowth > GIVE_UP_MS) stop();
+        }
+      }, INTERVAL_MS);
+    }
   }
 
   // --- Volume slider ---

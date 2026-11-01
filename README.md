@@ -6,8 +6,9 @@ Improvements compared to the official Deezer client:
 - You can actually select the language of the interface
 - Has a volume slider that you can directly use
 - Your own playlist are now placed right below last played in the home screen
-- Bigger play buttons with a smoothly animated progress bar
-- Does not show a media overlay when playing songs using media keys
+- Bigger play buttons with smoothly animated progress bar
+- Remembers your scroll position in your artists page even with 100s of artists followed
+- No windows media overlay when playing songs using media keys
 - Uses less diskspace (3mb vs 277mb)
 - Now without ideological newspeak when in German
 - Removes generated playlists with unwanted political messaging from the home screen
